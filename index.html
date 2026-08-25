@@ -138,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.8.1';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -294,7 +294,7 @@ function computeGeometry() {
   const sk = sketchRadius();
   G.sketchR = sk.R;
   G.sketchRows = sk.rows;
-  G.rowH = 2 * (sk.R + SKETCH_TAIL + 4);
+  G.rowH = 2 * sketchHalf(sk.R);
   G.sketchH = project.showSketches ? sk.rows * G.rowH : 0;
   G.titleH = 44;
   G.ML = 58; G.MR = 58;
@@ -615,6 +615,8 @@ const LANE_CLR = 4;     // מרווח מזערי בין קצה חץ לנתיב �
 const HEAD_LEN = 5;     // ראש החץ מתארך מעבר לקצה הענף — נכלל בחישוב המרווחים
 const BRANCH_MAX = 8;   // אורך מרבי לענף פנייה
 const SKETCH_TAIL = 30; // מה שנמשך מעבר לרדיוס הסקיצה (עיגולי המופעים)
+const SKETCH_EDGE = 14; // שוליים נוספים לסימון הצפון בפינה
+function sketchHalf(R) { return R + SKETCH_TAIL + SKETCH_EDGE; }
 
 // סדר הנתיבים בגישה: שמאלה בצד השמאלי, ימינה בצד הימני, ישר באמצע
 const LANE_RANK = { L: 0, TL: 1, LR: 2, TLR: 2, T: 3, TR: 4, R: 5 };
@@ -675,17 +677,45 @@ function turnLeg(arm, mvt) {
   return heading;                                      // ישר
 }
 
-// חץ צפון קטן, זהה בכל סקיצה ומסובב יחד איתה
-function buildNorthMark(cx, cy, R, rot) {
+/* חץ צפון קטן בפינה של כל סקיצה. הפינה נבחרת דינמית: רוחב פרוסת
+   הנתיבים שונה בין גישות (ומסתובב עם הסקיצה), ולכן פינה קבועה עלולה
+   ליפול על גישה עמוסה. נבחרת הפינה שהגישות הצמודות לה צרות ביותר,
+   והמרחק נקבע כך שהסימון יושב מעבר לרוחב הנתיבים ולעיגולי המופעים. */
+function buildNorthMark(cx, cy, R, rot, armLanes) {
   const nv = rot([0, -1]);
-  const d = 0.62 * (R + SKETCH_TAIL);
-  const ox = cx - d, oy = cy - d;              // פינה שמאלית-עליונה של הסקיצה
-  const L = Math.max(9, R * 0.2);
+  const armBand = {};
+  ['N', 'S', 'E', 'W'].forEach(a => {
+    const n = (armLanes[a] || []).length;
+    armBand[a] = n ? LANE_BASE + (n - 1) * LANE_GAP + BRANCH_MAX + HEAD_LEN : 0;
+  });
+
+  // אורך החץ עצמו נכנס לחישוב: הוא מתפרש לאורך ציר הצפון, ולכן מקרב את
+  // הסימון לגישה שציר הצפון מקביל לה
+  const L = Math.max(7, R * 0.15);
+  const reach = L + 7;                                     // מהפינה ועד קצה החץ
+
+  const corners = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+  let best = null;
+  corners.forEach(c => {
+    let need = 0;
+    ['N', 'S', 'E', 'W'].forEach(a => {
+      const e = rot(COMPASS_VEC[a]);                       // כיוון הזרוע במסך
+      if (e[0] * c[0] + e[1] * c[1] > 0.1) need = Math.max(need, armBand[a]);
+    });
+    const u = need + reach + 7;
+    if (!best || u < best.u - 0.5) best = { c: c, u: u };
+  });
+
+  const u = Math.min(best.u, R + SKETCH_TAIL + 4);
+  const ox = cx + best.c[0] * u, oy = cy + best.c[1] * u;
   const x1 = ox - nv[0] * L, y1 = oy - nv[1] * L;
   const x2 = ox + nv[0] * L, y2 = oy + nv[1] * L;
+  // התווית ניצבת לחץ ופונה החוצה, כדי לא להאריך אותו לכיוון הגישות
+  const pv = [-nv[1], nv[0]];
+  const out = (pv[0] * best.c[0] + pv[1] * best.c[1]) >= 0 ? 1 : -1;
   let s = `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${STYLE.sketchLine}" stroke-width="1.3"/>`;
   s += `<path d="M ${x2 + nv[0] * 6} ${y2 + nv[1] * 6} L ${x2 - nv[1] * 3.5} ${y2 + nv[0] * 3.5} L ${x2 + nv[1] * 3.5} ${y2 - nv[0] * 3.5} Z" fill="${STYLE.sketchLine}"/>`;
-  s += `<text x="${x2 + nv[0] * 14}" y="${y2 + nv[1] * 14 + 3.5}" text-anchor="middle" font-size="10" font-weight="bold" fill="${STYLE.sketchLine}">צ</text>`;
+  s += `<text x="${ox + pv[0] * out * 8}" y="${oy + pv[1] * out * 8 + 3.5}" text-anchor="middle" font-size="10" font-weight="bold" fill="${STYLE.sketchLine}">צ</text>`;
   return s;
 }
 
@@ -733,13 +763,14 @@ function sketchRadius() {
       const c0 = (pos[i - 1].a + pos[i - 1].b) / 2, c1 = (pos[i].a + pos[i].b) / 2;
       minSpace = Math.min(minSpace, (c1 - c0) * sx);
     }
-    if (minSpace < 2 * (R + SKETCH_TAIL)) {
-      const shrunk = minSpace / 2 - SKETCH_TAIL;      // הקטנה בשורה אחת
+    if (minSpace < 2 * sketchHalf(R)) {
+      const pad = SKETCH_TAIL + SKETCH_EDGE;
+      const shrunk = minSpace / 2 - pad;              // הקטנה בשורה אחת
       if (shrunk >= 40) {
         R = Math.min(R, shrunk);
       } else {
         rows = 2;                                     // שתי שורות — המרווח האפקטיבי כפול
-        R = Math.max(30, Math.min(R, minSpace - SKETCH_TAIL));
+        R = Math.max(30, Math.min(R, minSpace - pad));
       }
     }
   }
@@ -768,8 +799,8 @@ function buildSketch(it, cx, idx) {
     s += `<line x1="${cx}" y1="${cy}" x2="${cx + v[0] * R}" y2="${cy + v[1] * R}" stroke="${STYLE.sketchLine}" stroke-width="1"/>`;
   });
 
-  // חץ צפון בפינת כל סקיצה (הפינה האלכסונית פנויה מחצים ומעיגולי מופעים)
-  s += buildNorthMark(cx, cy, R, rot);
+  // חץ צפון בפינת כל סקיצה
+  s += buildNorthMark(cx, cy, R, rot, armLanes);
 
   function head(x, y, dx, dy) {
     const px = -dy, py = dx, hs = 3.5;
