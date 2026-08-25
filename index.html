@@ -130,7 +130,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -141,10 +141,26 @@ const STYLE = {
   timeLbl: '#33475b',
   ruler: '#8494a3',
   bar: '#3fae6e', barEdge: '#1e7a47', barTxt: '#ffffff',
+  barLbl: '#33475b',
   dir1: '#1565c0', dir2: '#e65100',
   sketchLine: '#4a5a68', phCircle: '#17324d', phTxt: '#ffffff',
   dim: '#5a6a78'
 };
+
+// צבע לכל מופע לפי מקומו ברשימת מופעי הצומת (מופע ראשון ירוק, וכן הלאה) —
+// [מילוי, מסגרת]. אותו מספר-סדר מקבל אותו צבע בכל הצמתים.
+const PHASE_PALETTE = [
+  ['#3fae6e', '#1e7a47'],  // ירוק
+  ['#8e6cc3', '#5f4390'],  // סגול
+  ['#e0a52e', '#a87a15'],  // חרדל
+  ['#4db6c9', '#2b8a9c'],  // טורקיז
+  ['#c96b9a', '#985070'],  // ורוד-עתיק
+  ['#8b9a4e', '#66743a']   // זית
+];
+function phaseColor(idx) { return PHASE_PALETTE[((idx % PHASE_PALETTE.length) + PHASE_PALETTE.length) % PHASE_PALETTE.length]; }
+
+// עיצוב שניות לתווית: שלם ללא נקודה, אחרת ספרה אחת
+function fmtSec(v) { const r = Math.round(v * 10) / 10; return String(r % 1 === 0 ? Math.round(r) : r); }
 const LS_KEY = 'greenwave_project_v1';
 
 /* ---------- מודל נתונים ---------- */
@@ -415,12 +431,15 @@ function buildGreens(it, d, p, prog) {
   let s = '';
   const off = +d.offset || 0;
   const reps = Math.ceil(G.span / G.cycle) + 1;
-  it.phases.forEach(ph => {
+  it.phases.forEach((ph, phIdx) => {
+    const [fill, edge] = phaseColor(phIdx);
     const ivs = parseIntervals((d.greens || {})[ph.id]);
     ivs.forEach(([gs, ge]) => {
       const dur = intervalDur(gs, ge, G.cycle);
       if (dur <= 0) return;
       const sysStart = mod(gs + off, G.cycle);
+      const lblStart = fmtSec(sysStart);                      // זמן מערכת של תחילת הירוק
+      const lblEnd = fmtSec(mod(sysStart + dur, G.cycle));    // וזמן הסיום
       [['dir1', p.a], ['dir2', p.b]].forEach(([dk, m]) => {
         if (!ph[dk]) return;
         const x = mx(m);
@@ -430,9 +449,16 @@ function buildGreens(it, d, p, prog) {
           if (t1 <= 0 || t0 >= G.span) continue;
           const c0 = Math.max(0, t0), c1 = Math.min(G.span, t1);
           const yTop = ty(c1), h = (c1 - c0) * G.pxSec;
-          s += `<rect x="${x - 8}" y="${yTop}" width="16" height="${h}" rx="3" fill="${STYLE.bar}" stroke="${STYLE.barEdge}" stroke-width="1"/>`;
+          s += `<rect x="${x - 8}" y="${yTop}" width="16" height="${h}" rx="3" fill="${fill}" stroke="${edge}" stroke-width="1"/>`;
           if (h > 13) {
             s += `<text x="${x}" y="${yTop + h / 2 + 4}" text-anchor="middle" font-size="11" font-weight="bold" fill="${STYLE.barTxt}">${esc(ph.id)}</text>`;
+          }
+          // ערכי התחלה/סיום על הציר (מדולג כשהמלבן נחתך בקצה התחום)
+          if (t1 <= G.span) {
+            s += `<text x="${x}" y="${ty(t1) - 3}" text-anchor="middle" font-size="9" fill="${STYLE.barLbl}">${lblEnd}</text>`;
+          }
+          if (t0 >= 0) {
+            s += `<text x="${x}" y="${ty(t0) + 10}" text-anchor="middle" font-size="9" fill="${STYLE.barLbl}">${lblStart}</text>`;
           }
           // נקודות הצמדה — תחילת/סוף ירוק בתחום המוצג
           if (t0 >= 0 && t0 <= G.span) snapPoints.push({ m, t: t0 });
@@ -622,7 +648,9 @@ function buildSketch(it, cx) {
       }));
       ids.slice(0, 2).forEach((id, k) => {
         const bx = sx - d[0] * (9 + k * 15), by = sy - d[1] * (9 + k * 15);
-        s += `<circle cx="${bx}" cy="${by}" r="7" fill="${STYLE.phCircle}"/>`;
+        const pidx = it.phases.findIndex(p => p.id === id);
+        const col = pidx >= 0 ? phaseColor(pidx)[1] : STYLE.phCircle;
+        s += `<circle cx="${bx}" cy="${by}" r="7" fill="${col}"/>`;
         s += `<text x="${bx}" y="${by + 3.5}" text-anchor="middle" font-size="9" font-weight="bold" fill="${STYLE.phTxt}">${esc(id)}</text>`;
       });
     });
