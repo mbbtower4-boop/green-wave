@@ -130,7 +130,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -292,7 +292,7 @@ function computeGeometry() {
   G.cycle = +prog.cycle || 90;
   G.span = G.cycle * (+project.cyclesShown || 1.75);
   G.pxSec = +project.pxPerSec || 3.2;
-  G.sketchH = project.showSketches ? 150 : 0;
+  G.sketchH = project.showSketches ? 172 : 0;
   G.titleH = 44;
   G.ML = 58; G.MR = 58;
   G.topY = G.titleH + G.sketchH + 14;
@@ -541,6 +541,27 @@ function movesSummary(str) {
 
 const COMPASS_VEC = { N: [0, -1], S: [0, 1], E: [1, 0], W: [-1, 0] }; // מפה: צפון למעלה
 
+/* גיאומטריית הנתיבים בסקיצה (מרחקים ממרכז הצומת, בפיקסלים):
+   הנתיב הראשון צמוד לציר הדרך והבאים אחריו לכיוון השוליים; הגזע נעצר
+   בקו העצירה והפניות מסתעפות לפניו — כך ששמאלה אינה חוצה את ציר הדרך
+   וימינה אינה נוגעת בקווי הצירים. */
+const LANE_BASE = 15;   // היסט הנתיב הראשון מציר הדרך
+const LANE_GAP = 13;    // מרווח בין נתיבים
+const STOP_Q = 16;      // קו העצירה — עד לשם מגיע חץ "ישר"
+const BRANCH_Q = 25;    // מרחק הסתעפות הפניות (לפני קו העצירה)
+const AXIS_CLR = 3;     // מרווח מזערי בין קצה חץ שמאלה לציר הדרך
+const HEAD_LEN = 5;     // ראש החץ מתארך מעבר לקצה הענף — נכלל בחישוב המרווחים
+
+// סדר הנתיבים בגישה: שמאלה בצד השמאלי, ימינה בצד הימני, ישר באמצע
+const LANE_RANK = { L: 0, TL: 1, LR: 2, TLR: 2, T: 3, TR: 4, R: 5 };
+function sortLanes(arr) {
+  return (arr || []).slice().sort((a, b) => {
+    const ra = LANE_RANK[a] === undefined ? 3 : LANE_RANK[a];
+    const rb = LANE_RANK[b] === undefined ? 3 : LANE_RANK[b];
+    return ra - rb;
+  });
+}
+
 // סיבוב הסקיצות: ממפה את כיווני המפה למערכת התרשים כך שציר התיאום שוכב
 // אופקית — כיוון א' נוסע במסך לאותו צד שבו הוא נוסע בתרשים הזרימה.
 function sketchRot() {
@@ -572,6 +593,11 @@ function phasesFor(it, arm, mvt) {
 
 function ensureLanes(it) {
   if (!it.lanes) it.lanes = { N: [], S: [], E: [], W: [] };
+  // נירמול סדר הנתיבים (גם לפרויקטים שנשמרו לפני סידור אוטומטי)
+  ['N', 'S', 'E', 'W'].forEach(a => {
+    if (!it.lanes[a]) it.lanes[a] = [];
+    else it.lanes[a] = sortLanes(it.lanes[a]);
+  });
   return it.lanes;
 }
 
@@ -610,44 +636,47 @@ function buildSketch(it, cx) {
     return `<path d="M ${x + dx * 5} ${y + dy * 5} L ${x - dx * 2 + px * hs} ${y - dy * 2 + py * hs} L ${x - dx * 2 - px * hs} ${y - dy * 2 - py * hs} Z" fill="${STYLE.sketchLine}"/>`;
   }
 
-  // חץ נתיב: גזע לכיוון הנסיעה + ענף לכל פנייה (נתיב משולב = כמה ראשים)
-  function laneArrow(sx, sy, d, lane) {
-    const lft = [d[1], -d[0]], rgt = [-d[1], d[0]];
-    const hasT = lane.includes('T');
-    const shaft = hasT ? 24 : 14;
-    const ex = sx + d[0] * shaft, ey = sy + d[1] * shaft;
-    let a = `<path d="M ${sx} ${sy} L ${ex} ${ey}" fill="none" stroke="${STYLE.sketchLine}" stroke-width="1.2"/>`;
-    if (hasT) a += head(ex, ey, d[0], d[1]);
-    ['L', 'R'].forEach(t => {
-      if (!lane.includes(t)) return;
-      const tv = t === 'L' ? lft : rgt;
-      const bp = hasT ? [sx + d[0] * 14, sy + d[1] * 14] : [ex, ey];
-      const tip = [bp[0] + tv[0] * 11, bp[1] + tv[1] * 11];
-      a += `<path d="M ${bp[0]} ${bp[1]} L ${tip[0]} ${tip[1]}" fill="none" stroke="${STYLE.sketchLine}" stroke-width="1.2"/>`;
-      a += head(tip[0], tip[1], tv[0], tv[1]);
-    });
-    return a;
-  }
-
   ['N', 'S', 'E', 'W'].forEach(arm => {
-    const lanesArr = armLanes[arm];
+    const lanesArr = sortLanes(armLanes[arm]);
     if (!lanesArr.length) return;
     const av = COMPASS_VEC[arm];
     const d = rot([-av[0], -av[1]]);          // כיוון הנסיעה במסך
-    const rgt = [-d[1], d[0]];                // ימין הנהג — הנתיבים בצד ימין
+    const rgt = [-d[1], d[0]];                // ימין הנהג
+    const lft = [d[1], -d[0]];
     const edge = rot(av);                     // אל קצה הזרוע
+    // נקודה במרחק q מהמרכז לאורך הזרוע, בהיסט o ימינה מציר הדרך
+    const P = (q, o) => [cx + edge[0] * q + rgt[0] * o, cy + edge[1] * q + rgt[1] * o];
+
     lanesArr.forEach((lane, li) => {
-      const off = 7 + li * 12;
-      const sx = cx + edge[0] * (R - 6) + rgt[0] * off;
-      const sy = cy + edge[1] * (R - 6) + rgt[1] * off;
-      s += laneArrow(sx, sy, d, lane);
+      const off = LANE_BASE + li * LANE_GAP;   // הנתיב הראשון צמוד לציר, הבאים לכיוון השוליים
+      const hasT = lane.includes('T');
+      const tail = P(R - 2, off);
+      const stopQ = hasT ? STOP_Q : BRANCH_Q;  // עד היכן מגיע הגזע
+      const stem = P(stopQ, off);
+      s += `<path d="M ${tail[0]} ${tail[1]} L ${stem[0]} ${stem[1]}" fill="none" stroke="${STYLE.sketchLine}" stroke-width="1.2"/>`;
+      if (hasT) s += head(stem[0], stem[1], d[0], d[1]);
+
+      ['L', 'R'].forEach(t => {
+        if (!lane.includes(t)) return;
+        const tv = t === 'L' ? lft : rgt;
+        // אורך ההסתעפות (כולל ראש החץ): שמאלה — עד לפני ציר הדרך, בלי
+        // לחצות אותו; ימינה — כלפי השוליים, בלי לגלוש מגבול הסקיצה
+        const len = t === 'L' ? Math.max(5, Math.min(10, off - AXIS_CLR - HEAD_LEN))
+                              : Math.max(5, Math.min(10, R - off - HEAD_LEN));
+        const bp = P(BRANCH_Q, off);
+        const tip = [bp[0] + tv[0] * len, bp[1] + tv[1] * len];
+        s += `<path d="M ${bp[0]} ${bp[1]} L ${tip[0]} ${tip[1]}" fill="none" stroke="${STYLE.sketchLine}" stroke-width="1.2"/>`;
+        s += head(tip[0], tip[1], tv[0], tv[1]);
+      });
+
       // עיגולי מופעים מאחורי תחילת הנתיב
       const ids = [];
       String(lane).split('').forEach(mv => phasesFor(it, arm, mv).forEach(id => {
         if (!ids.includes(id)) ids.push(id);
       }));
       ids.slice(0, 2).forEach((id, k) => {
-        const bx = sx - d[0] * (9 + k * 15), by = sy - d[1] * (9 + k * 15);
+        const c = P(R + 6 + k * 15, off);
+        const bx = c[0], by = c[1];
         const pidx = it.phases.findIndex(p => p.id === id);
         const col = pidx >= 0 ? phaseColor(pidx)[1] : STYLE.phCircle;
         s += `<circle cx="${bx}" cy="${by}" r="7" fill="${col}"/>`;
@@ -792,13 +821,20 @@ const LANE_OPTS = [
 ];
 
 function addLane(i, arm) {
-  upd(() => { ensureLanes(project.intersections[i])[arm].push('T'); });
+  upd(() => {
+    const L = ensureLanes(project.intersections[i]);
+    L[arm] = sortLanes(L[arm].concat('T'));
+  });
 }
 function delLane(i, arm, li) {
   upd(() => { ensureLanes(project.intersections[i])[arm].splice(li, 1); });
 }
 function setLane(i, arm, li, val) {
-  upd(() => { ensureLanes(project.intersections[i])[arm][li] = val; });
+  upd(() => {
+    const L = ensureLanes(project.intersections[i]);
+    L[arm][li] = val;
+    L[arm] = sortLanes(L[arm]);   // הנתיב נכנס למקומו ההגיוני בגישה
+  });
 }
 
 function addPhase(i) {
@@ -1094,7 +1130,7 @@ function renderSide() {
     // עורך נתיבים לכל גישה
     const lanesObj = ensureLanes(it);
     h += `<b class="small">נתיבים בגישות (לסקיצה):</b>
-    <table class="tbl"><tr><th>גישה</th><th style="text-align:right">נתיבים (הראשון = השמאלי)</th></tr>`;
+    <table class="tbl"><tr><th>גישה</th><th style="text-align:right">נתיבים (משמאל לימין)</th></tr>`;
     ['N', 'S', 'E', 'W'].forEach(arm => {
       let cells = '';
       (lanesObj[arm] || []).forEach((lane, li) => {
@@ -1107,7 +1143,7 @@ function renderSide() {
       h += `<tr><td>${ARM_HEB[arm]} (${arm})</td><td style="text-align:right">${cells}</td></tr>`;
     });
     h += `</table>
-    <div class="hint">כל נתיב מצויר כחץ נפרד בסקיצה (נתיב משולב = חץ מפוצל), עם מספרי המופעים המשרתים אותו. גישה בלי נתיבים מוגדרים — חץ לכל תנועה מהמופעים כבעבר.</div>`;
+    <div class="hint">כל נתיב מצויר כחץ נפרד בסקיצה (נתיב משולב = חץ מפוצל), עם מספרי המופעים המשרתים אותו. הנתיבים מסודרים אוטומטית לפי מיקומם בכביש — שמאלה בצד השמאלי, ימינה בצד הימני. גישה בלי נתיבים מוגדרים — חץ לכל תנועה מהמופעים.</div>`;
   }
   h += `</div></details>`;
 
