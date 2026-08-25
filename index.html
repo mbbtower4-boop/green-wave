@@ -138,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.8.1';
+const APP_VERSION = '1.9.0';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -208,7 +208,7 @@ function defaultProject() {
 }
 
 let project = defaultProject();
-let cur = { progIdx: 0, selInt: 0, tool: null, toolSpeed: 50, dragBand: null, movesEdit: null };
+let cur = { progIdx: 0, selInt: 0, tool: null, toolSpeed: 50, dragBand: null, movesEdit: null, pending: null };
 
 /* ---------- שמירה / טעינה ---------- */
 
@@ -473,26 +473,56 @@ function buildGreens(it, d, p, prog) {
   return s;
 }
 
+// שיפוע קו הגל: שניות למטר בכיוון +m
+function bandSlope(b) {
+  const v = Math.max(1, +b.speed || 30) / 3.6;          // מ'/שנ'
+  return (b.dir === 2 ? -1 : 1) / v;
+}
+
+/* רצועת גל ירוק: שני קצוות מקבילים (הקדמי והאחורי) עם תחום מוצל ביניהם.
+   רצועה ישנה ללא קצה שני מצוירת כקו בודד. */
 function buildBands(prog) {
   let s = '';
-  (prog.bands || []).forEach((b, bi) => {
-    const v = Math.max(1, +b.speed || 30) / 3.6;        // מ'/שנ'
-    const slope = (b.dir === 2 ? -1 : 1) / v;            // שנ' למטר בכיוון +m
+  const list = (prog.bands || []).slice();
+  if (cur.pending) list.push(Object.assign({ _pending: true }, cur.pending));
+
+  list.forEach((b, bi) => {
+    const slope = bandSlope(b);
     const col = b.dir === 2 ? STYLE.dir2 : STYLE.dir1;
+    const dash = b.dir === 2 ? '3 4' : '10 4';
+    const m0 = +b.m || 0;
+    const e1 = +b.t || 0;
+    const hasBand = b.t2 !== undefined && b.t2 !== null && b.t2 !== '' && +b.t2 !== e1;
+    const e2 = hasBand ? +b.t2 : e1;
+    const lo = Math.min(e1, e2), hi = Math.max(e1, e2);
     const reps = Math.ceil(G.span / G.cycle) + 1;
+    const xL = mx(0), xR = mx(G.totalM);
+
     for (let k = -reps; k <= reps; k++) {
-      const t0 = (+b.t || 0) + k * G.cycle - (+b.m || 0) * slope; // t בנקודה m=0
-      const tEnd = t0 + G.totalM * slope;
-      const x1 = mx(0), y1 = ty(t0), x2 = mx(G.totalM), y2 = ty(tEnd);
-      // דילוג על קווים שמחוץ לתחום לגמרי
-      if (Math.max(t0, tEnd) < 0 || Math.min(t0, tEnd) > G.span) continue;
-      s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}" stroke-width="1.5" stroke-dasharray="${b.dir === 2 ? '3 4' : '10 4'}"/>`;
-      // קו שקוף רחב לאינטראקציה (גרירה / מחיקה)
-      s += `<line class="bandHit" data-band="${bi}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="rgba(0,0,0,0)" stroke-width="10" style="cursor:ns-resize"/>`;
+      const aStart = lo + k * G.cycle - m0 * slope;      // קצה תחתון ב-m=0
+      const bStart = hi + k * G.cycle - m0 * slope;      // קצה עליון ב-m=0
+      const aEnd = aStart + G.totalM * slope;
+      const bEnd = bStart + G.totalM * slope;
+      if (Math.max(bStart, bEnd) < 0 || Math.min(aStart, aEnd) > G.span) continue;
+
+      if (hasBand) {   // תחום מוצל בין שני הקצוות
+        s += `<polygon points="${xL},${ty(aStart)} ${xR},${ty(aEnd)} ${xR},${ty(bEnd)} ${xL},${ty(bStart)}" ` +
+             `fill="${col}" fill-opacity="0.12"/>`;
+      }
+      [[aStart, aEnd, 0], [bStart, bEnd, 1]].forEach(([ts, te, edgeIdx]) => {
+        if (!hasBand && edgeIdx === 1) return;
+        s += `<line x1="${xL}" y1="${ty(ts)}" x2="${xR}" y2="${ty(te)}" stroke="${col}" stroke-width="1.5" stroke-dasharray="${dash}"/>`;
+        if (!b._pending) {
+          const edgeKey = (edgeIdx === 0) === (lo === e1) ? 't' : 't2';
+          s += `<line class="bandHit" data-band="${bi}" data-edge="${edgeKey}" x1="${xL}" y1="${ty(ts)}" x2="${xR}" y2="${ty(te)}" stroke="rgba(0,0,0,0)" stroke-width="10" style="cursor:ns-resize"/>`;
+        }
+      });
+
       if (k === 0) {
-        const lx = mx((+b.m || 0));
-        const lyT = (+b.t || 0);
-        s += `<text x="${lx + 12}" y="${ty(lyT) - 6}" font-size="11" fill="${col}">${Math.round(+b.speed)}</text>`;
+        const lx = mx(m0), lyT = ty(hi);
+        const txt = hasBand ? `${Math.round(+b.speed)} קמ"ש · רוחב ${fmtSec(Math.abs(e2 - e1))} שנ'`
+                            : `${Math.round(+b.speed)} קמ"ש`;
+        s += `<text x="${lx + 12}" y="${lyT - 6}" font-size="11" fill="${col}">${esc(txt)}</text>`;
       }
     }
   });
@@ -887,8 +917,19 @@ function onSvgClick(e) {
     if (d < bestD) { bestD = d; best = sp; }
   });
   if (best) { m = best.m; t = best.t; }
-  const prog = project.programs[cur.progIdx];
-  prog.bands.push({ m: Math.round(m * 10) / 10, t: Math.round(t * 10) / 10, speed: cur.toolSpeed, dir: cur.tool });
+  m = Math.round(m * 10) / 10; t = Math.round(t * 10) / 10;
+
+  if (!cur.pending) {
+    // קליק ראשון — הקצה הראשון של הרצועה
+    cur.pending = { m: m, t: t, speed: cur.toolSpeed, dir: cur.tool };
+    renderAll();
+    return;
+  }
+  // קליק שני — הקצה הנגדי, מומר לזמן באותו חתך m של הקצה הראשון
+  const pend = cur.pending;
+  const t2 = Math.round((t - (m - pend.m) * bandSlope(pend)) * 10) / 10;
+  project.programs[cur.progIdx].bands.push({ m: pend.m, t: pend.t, t2: t2, speed: pend.speed, dir: pend.dir });
+  cur.pending = null;
   cur.tool = null;
   persist(); renderAll();
 }
@@ -897,7 +938,9 @@ function onSvgPointerDown(e) {
   const el = e.target;
   if (el.classList && el.classList.contains('bandHit')) {
     e.preventDefault();
-    cur.dragBand = { idx: +el.dataset.band, startY: e.clientY, startT: +project.programs[cur.progIdx].bands[+el.dataset.band].t };
+    const b = project.programs[cur.progIdx].bands[+el.dataset.band];
+    const key = el.dataset.edge === 't2' ? 't2' : 't';
+    cur.dragBand = { idx: +el.dataset.band, key: key, startY: e.clientY, startT: +b[key] };
     window.addEventListener('pointermove', onDragMove);
     window.addEventListener('pointerup', onDragEnd);
   }
@@ -909,7 +952,7 @@ function onDragMove(e) {
   const scale = svg.getBoundingClientRect().height / G.H;
   const dt = (cur.dragBand.startY - e.clientY) / (G.pxSec * scale) * -1;
   const b = project.programs[cur.progIdx].bands[cur.dragBand.idx];
-  b.t = Math.round((cur.dragBand.startT - dt) * 10) / 10;
+  b[cur.dragBand.key] = Math.round((cur.dragBand.startT - dt) * 10) / 10;
   renderDiagram();
 }
 
@@ -931,7 +974,7 @@ function onSvgDblClick(e) {
 }
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && cur.tool) { cur.tool = null; renderAll(); }
+  if (e.key === 'Escape' && (cur.tool || cur.pending)) { cur.tool = null; cur.pending = null; renderAll(); }
 });
 
 /* ---------- פעולות עריכה ---------- */
@@ -1087,7 +1130,11 @@ function setGreen(i, phId, val) {
 }
 
 function setBandField(bi, key, val) {
-  updDiagram(() => { project.programs[cur.progIdx].bands[bi][key] = +val; });
+  upd(() => {
+    const b = project.programs[cur.progIdx].bands[bi];
+    if (key === 't2' && String(val).trim() === '') delete b.t2;   // ריק = קו בודד
+    else b[key] = +val;
+  });
 }
 
 function delBand(bi) {
@@ -1096,6 +1143,7 @@ function delBand(bi) {
 
 function startBandTool(dir) {
   cur.tool = (cur.tool === dir) ? null : dir;
+  cur.pending = null;
   const sp = document.getElementById('toolSpeed');
   if (sp) cur.toolSpeed = +sp.value || 50;
   renderAll();
@@ -1380,13 +1428,20 @@ function renderSide() {
       <button class="toolBtn ${cur.tool === 2 ? 'active' : ''}" onclick="startBandTool(2)">
         <span class="dirDot" style="background:${STYLE.dir2}"></span> ${esc(project.dir2Label)}</button>
     </div>
-    <div class="hint">${cur.tool ? 'לחץ על התרשים בנקודת ההתחלה (הקו נצמד לפינת ירוק קרובה). Esc לביטול.' : 'בחר כיוון ולחץ על התרשים להוספת קו. גרירה אנכית מזיזה קו; לחיצה כפולה מוחקת.'}</div>`;
+    <div class="hint">${
+      cur.pending ? 'סומן הקצה הראשון — לחץ עכשיו על הקצה השני של הרצועה. Esc לביטול.'
+      : cur.tool ? 'לחץ על הקצה הראשון של הרצועה, ואז על הקצה השני (הקליק נצמד לפינת ירוק קרובה). Esc לביטול.'
+      : 'בחר כיוון ולחץ פעמיים על התרשים — קצה ראשון וקצה שני — כדי ליצור רצועת גל. גרירה אנכית מזיזה קצה; לחיצה כפולה מוחקת.'}</div>`;
   (prog.bands || []).forEach((b, bi) => {
+    const hasBand = b.t2 !== undefined && b.t2 !== null && b.t2 !== '' && +b.t2 !== +b.t;
+    const w = hasBand ? fmtSec(Math.abs(+b.t2 - +b.t)) : 0;
     h += `<div class="bandRow">
       <span class="dirDot" style="background:${b.dir === 2 ? STYLE.dir2 : STYLE.dir1}"></span>
       <label>מ':</label><input type="number" value="${b.m}" onchange="setBandField(${bi},'m',this.value)">
-      <label>שנ':</label><input type="number" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
+      <label>קצה א':</label><input type="number" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
+      <label>קצה ב':</label><input type="number" value="${hasBand ? b.t2 : ''}" placeholder="—" onchange="setBandField(${bi},'t2',this.value)">
       <label>קמ"ש:</label><input type="number" value="${b.speed}" onchange="setBandField(${bi},'speed',this.value)">
+      <span class="small" style="color:#6b7a88">רוחב ${w} שנ'</span>
       <button class="mini danger" onclick="delBand(${bi})">✕</button>
     </div>`;
   });
