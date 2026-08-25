@@ -138,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.11.0';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -208,7 +208,7 @@ function defaultProject() {
 }
 
 let project = defaultProject();
-let cur = { progIdx: 0, selInt: 0, tool: null, toolSpeed: 50, dragBand: null, movesEdit: null, pending: null };
+let cur = { progIdx: 0, selInt: 0, tool: null, toolSpeed: 50, dragBand: null, movesEdit: null, pending: null, derive: false };
 
 /* ---------- שמירה / טעינה ---------- */
 
@@ -482,20 +482,20 @@ function buildGreens(it, d, p, prog) {
 
 /* מיקום תווית לאורך רצועה: נבחר חתך שאינו נופל על סרגל של צומת (שם
    מלבני הירוק היו מכסים אותה) ושנמצא בתוך תחום הזמן המוצג. */
-function bandLabelSpot(aStart, aEnd, bStart, bEnd, hasBand) {
+function bandLabelSpot(m1, m2, aStart, aEnd, bStart, bEnd, hasBand) {
   const rulerX = [];
   G.pos.forEach(p => { rulerX.push(mx(p.a), mx(p.b)); });
-  const cand = [0.32, 0.68, 0.5, 0.18, 0.82];
+  const x1 = mx(m1), x2 = mx(m2);
+  const cand = [0.5, 0.32, 0.68, 0.2, 0.8];
   for (const f of cand) {
-    const x = mx(0) + (mx(G.totalM) - mx(0)) * f;
-    if (rulerX.some(rx => Math.abs(rx - x) < 30)) continue;
+    const x = x1 + (x2 - x1) * f;
+    if (rulerX.some(rx => Math.abs(rx - x) < 26)) continue;
     const tA = aStart + (aEnd - aStart) * f;
     const tB = bStart + (bEnd - bStart) * f;
     const tMid = hasBand ? (tA + tB) / 2 : tA;
     if (tMid < 6 || tMid > G.span - 6) continue;
     const y = hasBand ? ty(tMid) + 4 : ty(tMid) - 6;
-    const dx = mx(G.totalM) - mx(0), dy = ty(aEnd) - ty(aStart);
-    return { x: x, y: y, angle: Math.atan2(dy, dx) * 180 / Math.PI };
+    return { x: x, y: y, angle: Math.atan2(ty(aEnd) - ty(aStart), x2 - x1) * 180 / Math.PI };
   }
   return null;
 }
@@ -513,8 +513,24 @@ function bandSlope(b) {
   return (b.dir === 2 ? -1 : 1) / v;
 }
 
+/* תחום המרחק שעליו מצוירת הרצועה: רצועה יכולה להיות מקטעית (בין שני
+   צמתים, כמו בחוברות גל ירוק שבהן לכל מקטע מהירות משלו) או לכל הציר. */
+function bandRange(b) {
+  const stopLine = i => {
+    const p = G.pos[i];
+    if (!p) return null;
+    return b.dir === 2 ? p.b : p.a;      // קו העצירה של אותו כיוון
+  };
+  const f = (b.from === undefined || b.from === null || b.from === '') ? null : stopLine(+b.from);
+  const t = (b.to === undefined || b.to === null || b.to === '') ? null : stopLine(+b.to);
+  let m1 = f === null ? 0 : f;
+  let m2 = t === null ? G.totalM : t;
+  if (m1 > m2) { const tmp = m1; m1 = m2; m2 = tmp; }
+  return [m1, m2];
+}
+
 /* רצועת גל ירוק: שני קצוות מקבילים (הקדמי והאחורי) עם תחום מוצל ביניהם.
-   רצועה ישנה ללא קצה שני מצוירת כקו בודד. */
+   רצועה ללא קצה שני מצוירת כקו בודד. */
 function buildBands(prog) {
   let s = '';
   const list = (prog.bands || []).slice();
@@ -529,34 +545,43 @@ function buildBands(prog) {
     const hasBand = b.t2 !== undefined && b.t2 !== null && b.t2 !== '' && +b.t2 !== e1;
     const e2 = hasBand ? +b.t2 : e1;
     const lo = Math.min(e1, e2), hi = Math.max(e1, e2);
+    const [m1, m2] = bandRange(b);
+    const xA = mx(m1), xB = mx(m2);
     const reps = Math.ceil(G.span / G.cycle) + 1;
-    const xL = mx(0), xR = mx(G.totalM);
 
     for (let k = -reps; k <= reps; k++) {
-      const aStart = lo + k * G.cycle - m0 * slope;      // קצה תחתון ב-m=0
-      const bStart = hi + k * G.cycle - m0 * slope;      // קצה עליון ב-m=0
-      const aEnd = aStart + G.totalM * slope;
-      const bEnd = bStart + G.totalM * slope;
+      const tAt = (base, m) => base + k * G.cycle + (m - m0) * slope;
+      const aStart = tAt(lo, m1), aEnd = tAt(lo, m2);
+      const bStart = tAt(hi, m1), bEnd = tAt(hi, m2);
       if (Math.max(bStart, bEnd) < 0 || Math.min(aStart, aEnd) > G.span) continue;
 
       if (hasBand) {   // תחום מוצל בין שני הקצוות
-        s += `<polygon points="${xL},${ty(aStart)} ${xR},${ty(aEnd)} ${xR},${ty(bEnd)} ${xL},${ty(bStart)}" ` +
+        s += `<polygon points="${xA},${ty(aStart)} ${xB},${ty(aEnd)} ${xB},${ty(bEnd)} ${xA},${ty(bStart)}" ` +
              `fill="${col}" fill-opacity="0.12"/>`;
       }
       [[aStart, aEnd, 0], [bStart, bEnd, 1]].forEach(([ts, te, edgeIdx]) => {
         if (!hasBand && edgeIdx === 1) return;
-        s += `<line x1="${xL}" y1="${ty(ts)}" x2="${xR}" y2="${ty(te)}" stroke="${col}" stroke-width="1.5" stroke-dasharray="${dash}"/>`;
+        s += `<line x1="${xA}" y1="${ty(ts)}" x2="${xB}" y2="${ty(te)}" stroke="${col}" stroke-width="1.5" stroke-dasharray="${dash}"/>`;
         if (!b._pending) {
           const edgeKey = (edgeIdx === 0) === (lo === e1) ? 't' : 't2';
-          s += `<line class="bandHit" data-band="${bi}" data-edge="${edgeKey}" x1="${xL}" y1="${ty(ts)}" x2="${xR}" y2="${ty(te)}" stroke="rgba(0,0,0,0)" stroke-width="10" style="cursor:ns-resize"/>`;
+          s += `<line class="bandHit" data-band="${bi}" data-edge="${edgeKey}" x1="${xA}" y1="${ty(ts)}" x2="${xB}" y2="${ty(te)}" stroke="rgba(0,0,0,0)" stroke-width="10" style="cursor:ns-resize"/>`;
         }
       });
 
       // תווית מהירות לאורך הרצועה, מסובבת בשיפוע הנסיעה
-      const txt = hasBand ? `${Math.round(+b.speed)} קמ"ש · ${fmtSec(Math.abs(e2 - e1))} שנ'`
-                          : `${Math.round(+b.speed)} קמ"ש`;
-      const spot = bandLabelSpot(aStart, aEnd, bStart, bEnd, hasBand);
+      const txt = `${Math.round(+b.speed)} קמ"ש`;
+      const spot = bandLabelSpot(m1, m2, aStart, aEnd, bStart, bEnd, hasBand);
       if (spot) s += rotatedLabel(spot.x, spot.y, spot.angle, txt, col);
+
+      // רוחב הרצועה בשניות בקצות המקטע (רק במחזור המרכזי, למניעת עומס)
+      if (hasBand && k === 0) {
+        const wTxt = `${fmtSec(Math.abs(e2 - e1))}"`;
+        const inward = xB > xA ? 1 : -1;
+        [[xA, (aStart + bStart) / 2, inward], [xB, (aEnd + bEnd) / 2, -inward]].forEach(([x, tMid, dir]) => {
+          if (tMid < 4 || tMid > G.span - 4) return;
+          s += rotatedLabel(x + dir * 16, ty(tMid), 0, wTxt, col);
+        });
+      }
     }
   });
   return s;
@@ -953,18 +978,56 @@ function onSvgClick(e) {
   m = Math.round(m * 10) / 10; t = Math.round(t * 10) / 10;
 
   if (!cur.pending) {
-    // קליק ראשון — הקצה הראשון של הרצועה
+    // קליק ראשון — הקצה הראשון של הרצועה (או תחילת המקטע במצב מחושב)
     cur.pending = { m: m, t: t, speed: cur.toolSpeed, dir: cur.tool };
     renderAll();
     return;
   }
-  // קליק שני — הקצה הנגדי, מומר לזמן באותו חתך m של הקצה הראשון
   const pend = cur.pending;
-  const t2 = Math.round((t - (m - pend.m) * bandSlope(pend)) * 10) / 10;
-  project.programs[cur.progIdx].bands.push({ m: pend.m, t: pend.t, t2: t2, speed: pend.speed, dir: pend.dir });
+
+  if (cur.derive) {
+    /* מצב מקטע: הלחיצה הראשונה היא נקודת היציאה והשנייה נקודת ההגעה,
+       והמהירות נגזרת מהמרחק וממשך הנסיעה (כולל מעבר גבול מחזור). */
+    const up = pend, down = { m: m, t: t };
+    const dirSign = cur.tool === 2 ? -1 : 1;
+    const ds = (down.m - up.m) * dirSign;          // חייב להיות חיובי בכיוון הנסיעה
+    const dt = mod(down.t - up.t, G.cycle);
+    if (ds < 1) {
+      alert('נקודת ההגעה נמצאת לפני נקודת היציאה בכיוון הנסיעה.\n' +
+            'לחץ קודם על צומת היציאה ואחר כך על צומת ההגעה, או החלף כיוון.');
+      cur.pending = null; renderAll(); return;
+    }
+    if (dt < 0.5) {
+      alert('לא ניתן לגזור מהירות: שתי הלחיצות באותו זמן.');
+      cur.pending = null; renderAll(); return;
+    }
+    const speed = Math.round(ds / dt * 3.6 * 10) / 10;
+    if (speed > 150) {
+      alert('המהירות שהתקבלה ' + speed + ' קמ"ש — כנראה שנקודת ההגעה סומנה מוקדם מדי.');
+      cur.pending = null; renderAll(); return;
+    }
+    project.programs[cur.progIdx].bands.push({
+      m: up.m, t: up.t, speed: speed, dir: cur.tool,
+      from: nearestIntersection(up.m, cur.tool), to: nearestIntersection(down.m, cur.tool)
+    });
+  } else {
+    // מצב רצועה: הקצה השני, מומר לזמן באותו חתך m של הקצה הראשון
+    const t2 = Math.round((t - (m - pend.m) * bandSlope(pend)) * 10) / 10;
+    project.programs[cur.progIdx].bands.push({ m: pend.m, t: pend.t, t2: t2, speed: pend.speed, dir: pend.dir });
+  }
   cur.pending = null;
   cur.tool = null;
   persist(); renderAll();
+}
+
+// הצומת שקו העצירה שלו (באותו כיוון) הקרוב ביותר למרחק נתון
+function nearestIntersection(m, dir) {
+  let best = null, bestD = 40;
+  G.pos.forEach((p, i) => {
+    const d = Math.abs((dir === 2 ? p.b : p.a) - m);
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return best;
 }
 
 function onSvgPointerDown(e) {
@@ -1165,10 +1228,23 @@ function setGreen(i, phId, val) {
 function setBandField(bi, key, val) {
   upd(() => {
     const b = project.programs[cur.progIdx].bands[bi];
-    if (key === 't2' && String(val).trim() === '') delete b.t2;   // ריק = קו בודד
-    else b[key] = +val;
+    if ((key === 'from' || key === 'to') && String(val) === '') { delete b[key]; return; }
+    b[key] = +val;
   });
 }
+
+// רוחב הרצועה בשניות (0 = קו בודד); נשמר כקצה השני
+function setBandWidth(bi, val) {
+  upd(() => {
+    const b = project.programs[cur.progIdx].bands[bi];
+    const w = Math.abs(+val || 0);
+    if (!w) { delete b.t2; return; }
+    const sign = (b.t2 !== undefined && +b.t2 < +b.t) ? -1 : 1;
+    b.t2 = Math.round((+b.t + sign * w) * 10) / 10;
+  });
+}
+
+function toggleDerive(on) { cur.derive = !!on; cur.pending = null; renderSide(); }
 
 function delBand(bi) {
   upd(() => { project.programs[cur.progIdx].bands.splice(bi, 1); });
@@ -1453,29 +1529,42 @@ function renderSide() {
   </div></details>`;
 
   /* --- קווי גל --- */
-  h += `<details class="sec" open><summary>קווי גל</summary><div class="secBody">
+  const intOpts = sel => project.intersections.map((it2, i) =>
+    `<option value="${i}" ${String(sel) === String(i) ? 'selected' : ''}>${esc(it2.name)}</option>`).join('');
+
+  h += `<details class="sec" open><summary>רצועות גל</summary><div class="secBody">
     <div class="row">
-      <label>מהירות:</label><input type="number" id="toolSpeed" min="5" value="${cur.toolSpeed}"> קמ"ש
+      <label>מהירות:</label><input type="number" id="toolSpeed" min="5" value="${cur.toolSpeed}" ${cur.derive ? 'disabled' : ''}> קמ"ש
       <button class="toolBtn ${cur.tool === 1 ? 'active' : ''}" onclick="startBandTool(1)">
         <span class="dirDot" style="background:${STYLE.dir1}"></span> ${esc(project.dir1Label)}</button>
       <button class="toolBtn ${cur.tool === 2 ? 'active' : ''}" onclick="startBandTool(2)">
         <span class="dirDot" style="background:${STYLE.dir2}"></span> ${esc(project.dir2Label)}</button>
     </div>
+    <div class="row"><label><input type="checkbox" ${cur.derive ? 'checked' : ''} onchange="toggleDerive(this.checked)">
+      מקטע בין צמתים — המהירות מחושבת מהלחיצות</label></div>
     <div class="hint">${
-      cur.pending ? 'סומן הקצה הראשון — לחץ עכשיו על הקצה השני של הרצועה. Esc לביטול.'
+      cur.pending && cur.derive ? 'סומנה נקודת היציאה — לחץ עכשיו על נקודת ההגעה בצומת הבא. Esc לביטול.'
+      : cur.pending ? 'סומן הקצה הראשון — לחץ עכשיו על הקצה השני של הרצועה. Esc לביטול.'
+      : cur.tool && cur.derive ? 'לחץ על קצה הירוק בצומת היציאה, ואז על קצה הירוק בצומת ההגעה — הכלי יחשב את המהירות ויצייר מקטע ביניהם. Esc לביטול.'
       : cur.tool ? 'לחץ על הקצה הראשון של הרצועה, ואז על הקצה השני (הקליק נצמד לפינת ירוק קרובה). Esc לביטול.'
-      : 'בחר כיוון ולחץ פעמיים על התרשים — קצה ראשון וקצה שני — כדי ליצור רצועת גל. גרירה אנכית מזיזה קצה; לחיצה כפולה מוחקת.'}</div>`;
+      : 'שני מצבים: רצועה במהירות נתונה (שתי לחיצות = שני קצוות), או מקטע בין צמתים שבו המהירות נגזרת מהמרחק ומהזמן. גרירה אנכית מזיזה קצה; לחיצה כפולה מוחקת.'}</div>`;
   (prog.bands || []).forEach((b, bi) => {
     const hasBand = b.t2 !== undefined && b.t2 !== null && b.t2 !== '' && +b.t2 !== +b.t;
-    const w = hasBand ? fmtSec(Math.abs(+b.t2 - +b.t)) : 0;
-    h += `<div class="bandRow">
-      <span class="dirDot" style="background:${b.dir === 2 ? STYLE.dir2 : STYLE.dir1}"></span>
-      <label>מ':</label><input type="number" value="${b.m}" onchange="setBandField(${bi},'m',this.value)">
-      <label>קצה א':</label><input type="number" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
-      <label>קצה ב':</label><input type="number" value="${hasBand ? b.t2 : ''}" placeholder="—" onchange="setBandField(${bi},'t2',this.value)">
-      <label>קמ"ש:</label><input type="number" value="${b.speed}" onchange="setBandField(${bi},'speed',this.value)">
-      <span class="small" style="color:#6b7a88">רוחב ${w} שנ'</span>
-      <button class="mini danger" onclick="delBand(${bi})">✕</button>
+    const w = hasBand ? Math.abs(Math.round((+b.t2 - +b.t) * 10) / 10) : 0;
+    h += `<div style="border:1px solid #dde4ea;border-radius:4px;padding:4px 6px;margin-bottom:4px">
+      <div class="bandRow">
+        <span class="dirDot" style="background:${b.dir === 2 ? STYLE.dir2 : STYLE.dir1}"></span>
+        <label>מ:</label>
+        <select onchange="setBandField(${bi},'from',this.value)"><option value="">קצה הציר</option>${intOpts(b.from)}</select>
+        <label>עד:</label>
+        <select onchange="setBandField(${bi},'to',this.value)"><option value="">קצה הציר</option>${intOpts(b.to)}</select>
+        <button class="mini danger" onclick="delBand(${bi})">✕</button>
+      </div>
+      <div class="bandRow">
+        <label>קצה א' (שנ'):</label><input type="number" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
+        <label>רוחב:</label><input type="number" min="0" value="${w}" onchange="setBandWidth(${bi},this.value)">
+        <label>קמ"ש:</label><input type="number" step="0.1" value="${b.speed}" onchange="setBandField(${bi},'speed',this.value)">
+      </div>
     </div>`;
   });
   h += `</div></details>`;
