@@ -130,7 +130,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.5.2';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -292,7 +292,11 @@ function computeGeometry() {
   G.cycle = +prog.cycle || 90;
   G.span = G.cycle * (+project.cyclesShown || 1.75);
   G.pxSec = +project.pxPerSec || 3.2;
-  G.sketchH = project.showSketches ? 172 : 0;
+  const sk = sketchRadius();
+  G.sketchR = sk.R;
+  G.sketchRows = sk.rows;
+  G.rowH = 2 * (sk.R + SKETCH_TAIL + 4);
+  G.sketchH = project.showSketches ? sk.rows * G.rowH : 0;
   G.titleH = 44;
   G.ML = 58; G.MR = 58;
   G.topY = G.titleH + G.sketchH + 14;
@@ -396,7 +400,7 @@ function buildSVG() {
     s += buildRuler(mx(p.a));
     s += buildRuler(mx(p.b));
     s += buildGreens(it, d, p, prog);
-    if (project.showSketches) s += buildSketch(it, (mx(p.a) + mx(p.b)) / 2);
+    if (project.showSketches) s += buildSketch(it, (mx(p.a) + mx(p.b)) / 2, i);
     // שם הצומת
     const cx = (mx(p.a) + mx(p.b)) / 2;
     const nameY = G.topY + G.diagH + 58;
@@ -546,11 +550,14 @@ const COMPASS_VEC = { N: [0, -1], S: [0, 1], E: [1, 0], W: [-1, 0] }; // מפה:
    בקו העצירה והפניות מסתעפות לפניו — כך ששמאלה אינה חוצה את ציר הדרך
    וימינה אינה נוגעת בקווי הצירים. */
 const LANE_BASE = 15;   // היסט הנתיב הראשון מציר הדרך
-const LANE_GAP = 13;    // מרווח בין נתיבים
+const LANE_GAP = 17;    // מרווח בין נתיבים (מאפשר ענף פנייה בתוך רוחב הנתיב)
 const STOP_Q = 16;      // קו העצירה — עד לשם מגיע חץ "ישר"
 const BRANCH_Q = 25;    // מרחק הסתעפות הפניות (לפני קו העצירה)
 const AXIS_CLR = 3;     // מרווח מזערי בין קצה חץ שמאלה לציר הדרך
+const LANE_CLR = 4;     // מרווח מזערי בין קצה חץ לנתיב השכן
 const HEAD_LEN = 5;     // ראש החץ מתארך מעבר לקצה הענף — נכלל בחישוב המרווחים
+const BRANCH_MAX = 8;   // אורך מרבי לענף פנייה
+const SKETCH_TAIL = 30; // מה שנמשך מעבר לרדיוס הסקיצה (עיגולי המופעים)
 
 // סדר הנתיבים בגישה: שמאלה בצד השמאלי, ימינה בצד הימני, ישר באמצע
 const LANE_RANK = { L: 0, TL: 1, LR: 2, TLR: 2, T: 3, TR: 4, R: 5 };
@@ -601,18 +608,13 @@ function ensureLanes(it) {
   return it.lanes;
 }
 
-function buildSketch(it, cx) {
-  const cy = G.titleH + G.sketchH / 2 + 4;
-  const R = 52; // חצי גובה/רוחב הסקיצה
-  let s = '';
+// פריסת הנתיבים בכל זרוע: מוגדרים ידנית, ואם אין — נתיב לכל תנועה מהמופעים
+function laneLayout(it) {
   const c1 = project.dir1Compass || 'N';
-  const rot = sketchRot();
-
-  // נתיבים לכל זרוע: מוגדרים ידנית, ואם אין — נתיב לכל תנועה מהמופעים
   const armLanes = {};
   ['N', 'S', 'E', 'W'].forEach(arm => {
     const def = (it.lanes && it.lanes[arm]) || [];
-    if (def.length) { armLanes[arm] = def.slice(); return; }
+    if (def.length) { armLanes[arm] = sortLanes(def); return; }
     const mv = [];
     it.phases.forEach(ph => parseMoves(ph.moves).forEach(m => {
       if (m.arm === arm && !mv.includes(m.mvt)) mv.push(m.mvt);
@@ -621,8 +623,56 @@ function buildSketch(it, cx) {
       if (parseMoves(ph.moves).length) return;
       if (((ph.dir1 && arm === OPP_COMPASS[c1]) || (ph.dir2 && arm === c1)) && !mv.includes('T')) mv.push('T');
     });
-    armLanes[arm] = mv;
+    armLanes[arm] = sortLanes(mv);
   });
+  return armLanes;
+}
+
+// רדיוס הסקיצה הנדרש למספר הנתיבים בגישה העמוסה ביותר
+function sketchRadius() {
+  let maxLanes = 1;
+  if (project.showSketches) {
+    project.intersections.forEach(it => {
+      const L = laneLayout(it);
+      ['N', 'S', 'E', 'W'].forEach(a => { maxLanes = Math.max(maxLanes, L[a].length); });
+    });
+  }
+  const outer = LANE_BASE + (maxLanes - 1) * LANE_GAP;   // היסט הנתיב החיצוני
+  let R = Math.max(52, outer + BRANCH_MAX + HEAD_LEN + 2);
+  let rows = 1;
+
+  // צמתים סמוכים: קודם מקטינים את הסקיצה, ואם עדיין צפוף — פורסים
+  // אותן בשתי שורות לסירוגין כדי שלא ייגעו זו בזו
+  const pos = rulerPositions();
+  if (pos.length > 1) {
+    const W = Math.max(700, +project.diagWidth || 1500);
+    const sx = (W - 116) / Math.max(1, pos[pos.length - 1].b);
+    let minSpace = Infinity;
+    for (let i = 1; i < pos.length; i++) {
+      const c0 = (pos[i - 1].a + pos[i - 1].b) / 2, c1 = (pos[i].a + pos[i].b) / 2;
+      minSpace = Math.min(minSpace, (c1 - c0) * sx);
+    }
+    if (minSpace < 2 * (R + SKETCH_TAIL)) {
+      const shrunk = minSpace / 2 - SKETCH_TAIL;      // הקטנה בשורה אחת
+      if (shrunk >= 40) {
+        R = Math.min(R, shrunk);
+      } else {
+        rows = 2;                                     // שתי שורות — המרווח האפקטיבי כפול
+        R = Math.max(30, Math.min(R, minSpace - SKETCH_TAIL));
+      }
+    }
+  }
+  return { R: R, rows: rows };
+}
+
+function buildSketch(it, cx, idx) {
+  const R = G.sketchR;
+  const row = G.sketchRows > 1 ? (idx % 2) : 0;
+  const cy = G.titleH + row * G.rowH + G.rowH / 2 + 4;
+  let s = '';
+  const c1 = project.dir1Compass || 'N';
+  const rot = sketchRot();
+  const armLanes = laneLayout(it);
 
   // צירי הדרכים: ציר התיאום — תמיד אופקי (אחרי הסיבוב); הדרך החוצה — אם יש בה נתיבים
   const crossArms = ['N', 'S', 'E', 'W'].filter(a => a !== c1 && a !== OPP_COMPASS[c1]);
@@ -637,7 +687,7 @@ function buildSketch(it, cx) {
   }
 
   ['N', 'S', 'E', 'W'].forEach(arm => {
-    const lanesArr = sortLanes(armLanes[arm]);
+    const lanesArr = armLanes[arm];
     if (!lanesArr.length) return;
     const av = COMPASS_VEC[arm];
     const d = rot([-av[0], -av[1]]);          // כיוון הנסיעה במסך
@@ -659,10 +709,13 @@ function buildSketch(it, cx) {
       ['L', 'R'].forEach(t => {
         if (!lane.includes(t)) return;
         const tv = t === 'L' ? lft : rgt;
-        // אורך ההסתעפות (כולל ראש החץ): שמאלה — עד לפני ציר הדרך, בלי
-        // לחצות אותו; ימינה — כלפי השוליים, בלי לגלוש מגבול הסקיצה
-        const len = t === 'L' ? Math.max(5, Math.min(10, off - AXIS_CLR - HEAD_LEN))
-                              : Math.max(5, Math.min(10, R - off - HEAD_LEN));
+        // אורך ההסתעפות (כולל ראש החץ) — נעצר לפני המכשול הקרוב בצד זה:
+        // נתיב שכן (אם קיים), ציר הדרך (בפנייה שמאלה מהנתיב הפנימי)
+        // או גבול הסקיצה (בפנייה ימינה מהנתיב החיצוני).
+        const neighbor = t === 'L' ? li > 0 : li < lanesArr.length - 1;
+        const room = neighbor ? LANE_GAP - LANE_CLR
+                   : (t === 'L' ? off - AXIS_CLR : R - off);
+        const len = Math.max(4, Math.min(BRANCH_MAX, room - HEAD_LEN));
         const bp = P(BRANCH_Q, off);
         const tip = [bp[0] + tv[0] * len, bp[1] + tv[1] * len];
         s += `<path d="M ${bp[0]} ${bp[1]} L ${tip[0]} ${tip[1]}" fill="none" stroke="${STYLE.sketchLine}" stroke-width="1.2"/>`;
