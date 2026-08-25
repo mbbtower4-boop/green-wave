@@ -130,7 +130,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.5.2';
+const APP_VERSION = '1.6.0';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -140,24 +140,15 @@ const STYLE = {
   grid: '#e8ecf0', cycleLine: '#9fb0bf', cycleBand: '#f4f7fa',
   timeLbl: '#33475b',
   ruler: '#8494a3',
-  bar: '#3fae6e', barEdge: '#1e7a47', barTxt: '#ffffff',
-  barLbl: '#33475b',
+  // חלונות הירוק נצבעים לפי הכיוון שהם משרתים — לא לפי מספר המופע,
+  // שכן אותה תנועה יכולה להיות מופע 1 בצומת אחד ומופע 3 בצומת אחר
+  barA: '#3fae6e', barAEdge: '#1e7a47',   // כיוון א'
+  barB: '#8e6cc3', barBEdge: '#5f4390',   // כיוון ב'
+  barTxt: '#ffffff', barLbl: '#33475b',
   dir1: '#1565c0', dir2: '#e65100',
   sketchLine: '#4a5a68', phCircle: '#17324d', phTxt: '#ffffff',
   dim: '#5a6a78'
 };
-
-// צבע לכל מופע לפי מקומו ברשימת מופעי הצומת (מופע ראשון ירוק, וכן הלאה) —
-// [מילוי, מסגרת]. אותו מספר-סדר מקבל אותו צבע בכל הצמתים.
-const PHASE_PALETTE = [
-  ['#3fae6e', '#1e7a47'],  // ירוק
-  ['#8e6cc3', '#5f4390'],  // סגול
-  ['#e0a52e', '#a87a15'],  // חרדל
-  ['#4db6c9', '#2b8a9c'],  // טורקיז
-  ['#c96b9a', '#985070'],  // ורוד-עתיק
-  ['#8b9a4e', '#66743a']   // זית
-];
-function phaseColor(idx) { return PHASE_PALETTE[((idx % PHASE_PALETTE.length) + PHASE_PALETTE.length) % PHASE_PALETTE.length]; }
 
 // עיצוב שניות לתווית: שלם ללא נקודה, אחרת ספרה אחת
 function fmtSec(v) { const r = Math.round(v * 10) / 10; return String(r % 1 === 0 ? Math.round(r) : r); }
@@ -301,7 +292,7 @@ function computeGeometry() {
   G.ML = 58; G.MR = 58;
   G.topY = G.titleH + G.sketchH + 14;
   G.diagH = G.span * G.pxSec;
-  G.botH = 92;
+  G.botH = 118;
   G.W = Math.max(700, +project.diagWidth || 1500);
   G.H = G.topY + G.diagH + G.botH;
   G.pos = rulerPositions();
@@ -410,8 +401,9 @@ function buildSVG() {
     });
   });
 
-  // שורת מידות (בין כל זוג סרגלים סמוכים)
+  // שורת מידות (בין כל זוג סרגלים סמוכים) ומפתח
   s += buildDimensions();
+  s += buildLegend();
 
   // חותרת קטנה
   s += `<text x="${project.rtlAxis ? G.W - 8 : 8}" y="${G.H - 6}" text-anchor="${project.rtlAxis ? 'end' : 'start'}" font-size="10" fill="#8a97a3">` +
@@ -435,8 +427,7 @@ function buildGreens(it, d, p, prog) {
   let s = '';
   const off = +d.offset || 0;
   const reps = Math.ceil(G.span / G.cycle) + 1;
-  it.phases.forEach((ph, phIdx) => {
-    const [fill, edge] = phaseColor(phIdx);
+  it.phases.forEach(ph => {
     const ivs = parseIntervals((d.greens || {})[ph.id]);
     ivs.forEach(([gs, ge]) => {
       const dur = intervalDur(gs, ge, G.cycle);
@@ -447,6 +438,8 @@ function buildGreens(it, d, p, prog) {
       [['dir1', p.a], ['dir2', p.b]].forEach(([dk, m]) => {
         if (!ph[dk]) return;
         const x = mx(m);
+        const fill = dk === 'dir1' ? STYLE.barA : STYLE.barB;
+        const edge = dk === 'dir1' ? STYLE.barAEdge : STYLE.barBEdge;
         for (let k = -1; k <= reps; k++) {
           const t0 = sysStart + k * G.cycle;
           const t1 = t0 + dur;
@@ -515,6 +508,31 @@ function buildDimensions() {
     s += `<line x1="${xa}" y1="${y - 4}" x2="${xa}" y2="${y + 4}" stroke="${STYLE.dim}" stroke-width="0.8"/>`;
     s += `<line x1="${xb}" y1="${y - 4}" x2="${xb}" y2="${y + 4}" stroke="${STYLE.dim}" stroke-width="0.8"/>`;
     s += `<text x="${(xa + xb) / 2}" y="${y - 5}" text-anchor="middle" font-size="10.5" fill="${STYLE.dim}">${(+val).toFixed(1)}</text>`;
+  });
+  return s;
+}
+
+// מפתח: משמעות צבעי חלונות הירוק וקווי הגל, מימין לשמאל
+function buildLegend() {
+  const y = G.topY + G.diagH + 96;
+  const items = [
+    { kind: 'bar', fill: STYLE.barA, edge: STYLE.barAEdge, txt: 'ירוק ' + project.dir1Label },
+    { kind: 'bar', fill: STYLE.barB, edge: STYLE.barBEdge, txt: 'ירוק ' + project.dir2Label },
+    { kind: 'line', col: STYLE.dir1, dash: '10 4', txt: 'גל ' + project.dir1Label },
+    { kind: 'line', col: STYLE.dir2, dash: '3 4', txt: 'גל ' + project.dir2Label }
+  ];
+  let s = '', cursor = G.W - G.MR;
+  items.forEach(it => {
+    const tw = String(it.txt).length * 6.6;
+    const sw = 16;
+    const sx = cursor - sw;
+    if (it.kind === 'bar') {
+      s += `<rect x="${sx + 3}" y="${y - 7}" width="10" height="14" rx="2" fill="${it.fill}" stroke="${it.edge}" stroke-width="1"/>`;
+    } else {
+      s += `<line x1="${sx}" y1="${y}" x2="${sx + sw}" y2="${y}" stroke="${it.col}" stroke-width="1.5" stroke-dasharray="${it.dash}"/>`;
+    }
+    s += `<text x="${sx - 5}" y="${y + 4}" text-anchor="end" font-size="11" fill="${STYLE.timeLbl}">${esc(it.txt)}</text>`;
+    cursor = sx - 5 - tw - 18;
   });
   return s;
 }
@@ -727,11 +745,12 @@ function buildSketch(it, cx, idx) {
       String(lane).split('').forEach(mv => phasesFor(it, arm, mv).forEach(id => {
         if (!ids.includes(id)) ids.push(id);
       }));
+      // צבע העיגול לפי הכיוון שהגישה משרתת (גישות הציר), אחרת נייטרלי
+      const col = arm === OPP_COMPASS[c1] ? STYLE.barAEdge
+                : arm === c1 ? STYLE.barBEdge : STYLE.phCircle;
       ids.slice(0, 2).forEach((id, k) => {
         const c = P(R + 6 + k * 15, off);
         const bx = c[0], by = c[1];
-        const pidx = it.phases.findIndex(p => p.id === id);
-        const col = pidx >= 0 ? phaseColor(pidx)[1] : STYLE.phCircle;
         s += `<circle cx="${bx}" cy="${by}" r="7" fill="${col}"/>`;
         s += `<text x="${bx}" y="${by + 3.5}" text-anchor="middle" font-size="9" font-weight="bold" fill="${STYLE.phTxt}">${esc(id)}</text>`;
       });
@@ -1102,9 +1121,9 @@ function renderSide() {
   h += `<details class="sec" open><summary>פרטי הציר</summary><div class="secBody">
     <div class="row"><label>שם:</label>
       <input type="text" style="width:200px" value="${esc(project.name)}" onchange="setProj('name', this.value)"></div>
-    <div class="row"><label>כיוון א' (כחול):</label>
+    <div class="row"><label>כיוון א':</label>
       <input type="text" style="width:90px" value="${esc(project.dir1Label)}" onchange="setProj('dir1Label', this.value)">
-      <label>כיוון ב' (כתום):</label>
+      <label>כיוון ב':</label>
       <input type="text" style="width:90px" value="${esc(project.dir2Label)}" onchange="setProj('dir2Label', this.value)"></div>
     <div class="row"><label>כיוון א' נוסע:</label>
       <select onchange="setProj('dir1Compass', this.value)">
@@ -1120,7 +1139,7 @@ function renderSide() {
       </select>
       <label>רוחב (px):</label><input type="number" min="700" step="100" value="${project.diagWidth}" onchange="setProjNum('diagWidth', this.value)">
       <label>px/שנ':</label><input type="number" min="1" step="0.2" value="${project.pxPerSec}" onchange="setProjNum('pxPerSec', this.value)"></div>
-    <div class="hint">כיוון א' נוסע מהצומת הראשון לאחרון (קו העצירה הקרוב לצומת הקודם); כיוון ב' — הפוך.</div>
+    <div class="hint">כיוון א' נוסע מהצומת הראשון לאחרון (קו העצירה הקרוב לצומת הקודם); כיוון ב' — הפוך. חלונות הירוק נצבעים לפי הכיוון (ולא לפי מספר המופע, שמשתנה בין צמתים) — ראו מפתח בתחתית התרשים.</div>
   </div></details>`;
 
   /* --- צמתים --- */
