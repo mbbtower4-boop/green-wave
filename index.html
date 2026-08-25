@@ -93,8 +93,15 @@
     #topbar, #side { display: none !important; }
     #main { display: block; }
     #canvasWrap { padding: 0; overflow: visible; }
-    #diagBox { box-shadow: none; }
-    svg { width: 100% !important; height: auto !important; }
+    #diagBox { box-shadow: none; display: block; }
+    /* עמוד אחד בלבד: הרוחב מלא, והגובה חסום לשטח ההדפסה כדי שלא יגלוש */
+    svg {
+      width: 100% !important;
+      height: auto !important;
+      max-height: 194mm !important;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
   }
 </style>
 </head>
@@ -108,6 +115,7 @@
   <button onclick="saveJSON()">שמירת קובץ</button>
   <button onclick="document.getElementById('fileInp').click()">טעינת קובץ</button>
   <input type="file" id="fileInp" accept=".json" style="display:none" onchange="loadJSON(this)">
+  <button onclick="fitA4()" title="מתאים את קנה המידה כך שהתרשים ימלא עמוד A4 לרוחב">התאם ל-A4</button>
   <button onclick="exportSVG()">ייצוא SVG</button>
   <button onclick="exportPNG()">ייצוא PNG</button>
   <button onclick="window.print()">הדפסה / PDF</button>
@@ -130,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -144,7 +152,7 @@ const STYLE = {
   // שכן אותה תנועה יכולה להיות מופע 1 בצומת אחד ומופע 3 בצומת אחר
   barA: '#3fae6e', barAEdge: '#1e7a47',   // כיוון א'
   barB: '#8e6cc3', barBEdge: '#5f4390',   // כיוון ב'
-  barTxt: '#ffffff', barLbl: '#33475b',
+  barTxt: '#ffffff', barLbl: '#000000',
   dir1: '#1565c0', dir2: '#e65100',
   sketchLine: '#4a5a68', phCircle: '#17324d', phTxt: '#ffffff',
   dim: '#5a6a78'
@@ -292,8 +300,9 @@ function computeGeometry() {
   G.ML = 58; G.MR = 58;
   G.topY = G.titleH + G.sketchH + 14;
   G.diagH = G.span * G.pxSec;
-  G.botH = 118;
   G.W = Math.max(700, +project.diagWidth || 1500);
+  G.legendRows = legendLayout();
+  G.botH = 94 + G.legendRows.length * LEGEND_ROW + 10;
   G.H = G.topY + G.diagH + G.botH;
   G.pos = rulerPositions();
   G.totalM = G.pos.length ? G.pos[G.pos.length - 1].b : 1;
@@ -409,7 +418,11 @@ function buildSVG() {
   s += `<text x="${project.rtlAxis ? G.W - 8 : 8}" y="${G.H - 6}" text-anchor="${project.rtlAxis ? 'end' : 'start'}" font-size="10" fill="#8a97a3">` +
        `מחולל תרשימי גל ירוק v${APP_VERSION}</text>`;
 
-  return `<svg id="diagram" xmlns="http://www.w3.org/2000/svg" width="${G.W}" height="${G.H}" viewBox="0 0 ${G.W} ${G.H}" font-family="Segoe UI, Arial, sans-serif">${s}</svg>`;
+  // direction="ltr" — במסמך RTL הסמנטיקה של text-anchor מתהפכת (end = הקצה
+  // השמאלי), ובקובץ SVG מיוצא היא ברירת מחדל LTR. קיבוע כאן שומר על עיגון
+  // אחיד ועל זהות בין התצוגה במסך לייצוא; מחרוזות עברית עדיין נכתבות מימין
+  // לשמאל בזכות ה-bidi.
+  return `<svg id="diagram" xmlns="http://www.w3.org/2000/svg" width="${G.W}" height="${G.H}" viewBox="0 0 ${G.W} ${G.H}" direction="ltr" font-family="Segoe UI, Arial, sans-serif">${s}</svg>`;
 }
 
 function buildRuler(x) {
@@ -425,6 +438,7 @@ function buildRuler(x) {
 
 function buildGreens(it, d, p, prog) {
   let s = '';
+  const drawnLbl = new Set();   // מונע הדפסה כפולה כשסוף מופע מתלכד עם תחילת הבא
   const off = +d.offset || 0;
   const reps = Math.ceil(G.span / G.cycle) + 1;
   it.phases.forEach(ph => {
@@ -450,13 +464,18 @@ function buildGreens(it, d, p, prog) {
           if (h > 13) {
             s += `<text x="${x}" y="${yTop + h / 2 + 4}" text-anchor="middle" font-size="11" font-weight="bold" fill="${STYLE.barTxt}">${esc(ph.id)}</text>`;
           }
-          // ערכי התחלה/סיום על הציר (מדולג כשהמלבן נחתך בקצה התחום)
-          if (t1 <= G.span) {
-            s += `<text x="${x}" y="${ty(t1) - 3}" text-anchor="middle" font-size="9" fill="${STYLE.barLbl}">${lblEnd}</text>`;
-          }
-          if (t0 >= 0) {
-            s += `<text x="${x}" y="${ty(t0) + 10}" text-anchor="middle" font-size="9" fill="${STYLE.barLbl}">${lblStart}</text>`;
-          }
+          // ערכי התחלה/סיום — משמאל לסרגל כדי שהקו לא יפריע לקריאה
+          // (מדולג כשהמלבן נחתך בקצה תחום הזמן המוצג)
+          const lx = x - 12;
+          const putLbl = (t, txt) => {
+            const yy = Math.round(ty(t));
+            const key = lx + '|' + yy + '|' + txt;
+            if (drawnLbl.has(key)) return;
+            drawnLbl.add(key);
+            s += `<text x="${lx}" y="${yy + 4}" text-anchor="end" font-size="12" font-weight="bold" fill="${STYLE.barLbl}">${txt}</text>`;
+          };
+          if (t1 <= G.span) putLbl(t1, lblEnd);
+          if (t0 >= 0) putLbl(t0, lblStart);
           // נקודות הצמדה — תחילת/סוף ירוק בתחום המוצג
           if (t0 >= 0 && t0 <= G.span) snapPoints.push({ m, t: t0 });
           if (t1 >= 0 && t1 <= G.span) snapPoints.push({ m, t: t1 });
@@ -512,27 +531,60 @@ function buildDimensions() {
   return s;
 }
 
-// מפתח: משמעות צבעי חלונות הירוק וקווי הגל, מימין לשמאל
-function buildLegend() {
-  const y = G.topY + G.diagH + 96;
+/* מפתח: משמעות צבעי חלונות הירוק וקווי הגל. הפריסה מימין לשמאל לפי
+   רוחב טקסט נמדד (לא מוערך), עם גלישה לשורה נוספת אם חסר מקום. */
+
+let _measCtx = null;
+function measureText(str, font) {
+  if (!_measCtx) _measCtx = document.createElement('canvas').getContext('2d');
+  _measCtx.font = font || '11px "Segoe UI", Arial, sans-serif';
+  return _measCtx.measureText(String(str)).width;
+}
+
+const LEGEND_SW = 20;    // רוחב הסמל
+const LEGEND_PAD = 6;    // בין הסמל לטקסט
+const LEGEND_GAP = 26;   // בין פריטים
+const LEGEND_ROW = 18;   // גובה שורת מפתח
+
+function legendLayout() {
   const items = [
     { kind: 'bar', fill: STYLE.barA, edge: STYLE.barAEdge, txt: 'ירוק ' + project.dir1Label },
     { kind: 'bar', fill: STYLE.barB, edge: STYLE.barBEdge, txt: 'ירוק ' + project.dir2Label },
     { kind: 'line', col: STYLE.dir1, dash: '10 4', txt: 'גל ' + project.dir1Label },
     { kind: 'line', col: STYLE.dir2, dash: '3 4', txt: 'גל ' + project.dir2Label }
   ];
-  let s = '', cursor = G.W - G.MR;
+  const avail = Math.max(200, G.W - G.ML - G.MR);
+  const rows = [];
+  let row = [], used = 0;
   items.forEach(it => {
-    const tw = String(it.txt).length * 6.6;
-    const sw = 16;
-    const sx = cursor - sw;
-    if (it.kind === 'bar') {
-      s += `<rect x="${sx + 3}" y="${y - 7}" width="10" height="14" rx="2" fill="${it.fill}" stroke="${it.edge}" stroke-width="1"/>`;
-    } else {
-      s += `<line x1="${sx}" y1="${y}" x2="${sx + sw}" y2="${y}" stroke="${it.col}" stroke-width="1.5" stroke-dasharray="${it.dash}"/>`;
-    }
-    s += `<text x="${sx - 5}" y="${y + 4}" text-anchor="end" font-size="11" fill="${STYLE.timeLbl}">${esc(it.txt)}</text>`;
-    cursor = sx - 5 - tw - 18;
+    it.tw = measureText(it.txt);
+    const w = LEGEND_SW + LEGEND_PAD + it.tw;
+    const need = w + (row.length ? LEGEND_GAP : 0);
+    if (row.length && used + need > avail) { rows.push(row); row = []; used = 0; }
+    row.push(it);
+    used += row.length > 1 ? need : w;
+  });
+  if (row.length) rows.push(row);
+  return rows;
+}
+
+function buildLegend() {
+  const rows = G.legendRows || legendLayout();
+  let s = '';
+  rows.forEach((row, ri) => {
+    const y = G.topY + G.diagH + 94 + ri * LEGEND_ROW;
+    let cursor = G.W - G.MR;             // מתחילים מימין
+    row.forEach(it => {
+      const sx = cursor - LEGEND_SW;     // הסמל בצד ימין של הפריט
+      if (it.kind === 'bar') {
+        s += `<rect x="${sx + 4}" y="${y - 7}" width="12" height="14" rx="2" fill="${it.fill}" stroke="${it.edge}" stroke-width="1"/>`;
+      } else {
+        s += `<line x1="${sx}" y1="${y}" x2="${sx + LEGEND_SW}" y2="${y}" stroke="${it.col}" stroke-width="1.6" stroke-dasharray="${it.dash}"/>`;
+      }
+      const tx = sx - LEGEND_PAD;        // הטקסט משמאל לסמל
+      s += `<text x="${tx}" y="${y + 4}" text-anchor="end" font-size="11" fill="${STYLE.timeLbl}">${esc(it.txt)}</text>`;
+      cursor = tx - it.tw - LEGEND_GAP;
+    });
   });
   return s;
 }
@@ -1035,6 +1087,23 @@ function exportPNG() {
     });
   };
   img.src = url;
+}
+
+/* התאמת פרופורציית התרשים לעמוד A4 לרוחב (שוליים 8 מ"מ):
+   שטח ההדפסה 281×194 מ"מ. משנים את קנה המידה של ציר הזמן כך שהגובה
+   הכולל יתאים בדיוק לעמוד — ואז ההדפסה ממלאת עמוד אחד בלי גלישה. */
+const A4_W_MM = 281, A4_H_MM = 194;
+
+function fitA4() {
+  computeGeometry();
+  const target = (A4_H_MM / A4_W_MM) * G.W;          // גובה רצוי בפיקסלים
+  const pxSec = (target - G.topY - G.botH) / Math.max(1, G.span);
+  if (pxSec < 0.5) {
+    alert('התרשים צפוף מדי לעמוד A4 יחיד בהגדרות הנוכחיות.\n' +
+          'אפשר להקטין את מספר המחזורים בציר הזמן, לכבות את סקיצות הצמתים, או להגדיל את רוחב התרשים.');
+    return;
+  }
+  upd(() => { project.pxPerSec = Math.round(pxSec * 100) / 100; });
 }
 
 function fileBase() {
