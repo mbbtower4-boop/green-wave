@@ -138,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.11.0';
+const APP_VERSION = '1.12.0';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -208,7 +208,7 @@ function defaultProject() {
 }
 
 let project = defaultProject();
-let cur = { progIdx: 0, selInt: 0, tool: null, toolSpeed: 50, dragBand: null, movesEdit: null, pending: null, derive: false };
+let cur = { progIdx: 0, selInt: 0, tool: null, toolSpeed: 50, dragBand: null, movesEdit: null, pending: null, derive: false, offsetCalc: null };
 
 /* ---------- שמירה / טעינה ---------- */
 
@@ -527,6 +527,144 @@ function bandRange(b) {
   let m2 = t === null ? G.totalM : t;
   if (m1 > m2) { const tmp = m1; m1 = m2; m2 = tmp; }
   return [m1, m2];
+}
+
+/* ---------- פותר אופסט: שיבוץ צומת לגל קיים ----------
+   בהינתן רצועות הגל הקיימות והירוקים המקומיים של צומת (מבנה עצמאי),
+   מחשב לאיזה אופסט הרצועות נכנסות בירוק — לכל כיוון בנפרד ולשניהם. */
+
+// חלונות ההגעה של הרצועות לקווי העצירה של צומת i, לפי כיוון
+function bandsAtIntersection(i, prog) {
+  const C = +prog.cycle || 90;
+  const p = G.pos[i];
+  const out = { 1: [], 2: [] };
+  (prog.bands || []).forEach(b => {
+    const dir = b.dir === 2 ? 2 : 1;
+    const m = dir === 2 ? p.b : p.a;
+    const range = bandRange(b);
+    if (m < range[0] - 0.01 || m > range[1] + 0.01) return;
+    const slope = bandSlope(b);
+    const e1 = (+b.t || 0) + (m - (+b.m || 0)) * slope;
+    const hasB = b.t2 !== undefined && b.t2 !== null && b.t2 !== '';
+    const e2 = hasB ? (+b.t2) + (m - (+b.m || 0)) * slope : e1;
+    out[dir].push({ A: mod(Math.min(e1, e2), C), w: Math.abs(e2 - e1) });
+  });
+  return out;
+}
+
+// הירוקים המקומיים של צומת i לפי כיוון (ללא האופסט)
+function greensLocal(i, prog) {
+  const C = +prog.cycle || 90;
+  const d = prog.data[i] || {};
+  const out = { 1: [], 2: [] };
+  project.intersections[i].phases.forEach(ph => {
+    parseIntervals((d.greens || {})[ph.id]).forEach(iv => {
+      const gl = intervalDur(iv[0], iv[1], C);
+      if (gl <= 0) return;
+      if (ph.dir1) out[1].push({ gs: mod(iv[0], C), gl: gl });
+      if (ph.dir2) out[2].push({ gs: mod(iv[0], C), gl: gl });
+    });
+  });
+  return out;
+}
+
+// כמה שניות מהרצועה נכנסות בירוק, באופסט נתון (החלון הטוב מבין הירוקים)
+function bandCoverage(band, greens, delta, C) {
+  let best = 0;
+  greens.forEach(g => {
+    const x = mod(band.A - g.gs - delta, C);
+    let ov = 0;
+    if (x < g.gl) ov += Math.min(g.gl, x + band.w) - x;
+    if (x + band.w > C) ov += Math.max(0, Math.min(g.gl, x + band.w - C));
+    best = Math.max(best, Math.min(band.w, ov));
+  });
+  return best;
+}
+
+function offsetSolve(i) {
+  const prog = project.programs[cur.progIdx];
+  const C = +prog.cycle || 90;
+  const bands = bandsAtIntersection(i, prog);
+  const greens = greensLocal(i, prog);
+  const dirs = [1, 2].filter(d => bands[d].length && greens[d].length);
+  const skipped = [1, 2].filter(d => bands[d].length && !greens[d].length);
+  if (![1, 2].some(d => bands[d].length)) return { error: 'אין רצועות גל שעוברות בצומת זה בתוכנית הנוכחית.' };
+  if (!dirs.length) return { error: 'לא הוזנו זמני ירוק לכיוונים שהרצועות משרתות בצומת זה.' };
+
+  // סריקת כל האופסטים בצעד 0.5 שנ'
+  const step = 0.5, n = Math.round(C / step);
+  const rows = [];
+  for (let k = 0; k < n; k++) {
+    const dl = k * step;
+    const rec = { d: dl, cov: {}, full: {}, tot: 0 };
+    dirs.forEach(dir => {
+      let cov = 0, full = true;
+      bands[dir].forEach(b => {
+        const c = bandCoverage(b, greens[dir], dl, C);
+        cov += c;
+        if (c < b.w - 0.05) full = false;
+      });
+      rec.cov[dir] = cov; rec.full[dir] = full; rec.tot += cov;
+    });
+    rows.push(rec);
+  }
+
+  // קיבוץ טווחים רציפים (עם איחוי סביב 0/C)
+  function runsOf(pred) {
+    const f = rows.map(pred);
+    const runs = [];
+    let st = null;
+    for (let k = 0; k < n; k++) {
+      if (f[k] && st === null) st = k;
+      if (!f[k] && st !== null) { runs.push([st, k - 1]); st = null; }
+    }
+    if (st !== null) runs.push([st, n - 1]);
+    if (runs.length > 1 && f[0] && f[n - 1]) {
+      const first = runs.shift(), last = runs.pop();
+      runs.push([last[0], first[1] + n]);
+    }
+    return runs.map(r => ({
+      from: mod(r[0] * step, C), to: mod(r[1] * step, C),
+      mid: mod((r[0] + (r[1] - r[0]) / 2) * step, C),
+      len: (r[1] - r[0]) * step
+    })).sort((a, b) => b.len - a.len);
+  }
+
+  const res = {
+    C: C, dirs: dirs, skipped: skipped, bands: bands, greens: greens,
+    runsBoth: dirs.length > 1 ? runsOf(r => dirs.every(d => r.full[d])) : [],
+    runsDir: {}
+  };
+  dirs.forEach(d => { res.runsDir[d] = runsOf(r => r.full[d]); });
+
+  // חלופות כשאין פתרון מלא לשניהם
+  if (dirs.length > 1 && !res.runsBoth.length) {
+    res.options = [];
+    dirs.forEach(d => {
+      const other = dirs.find(x => x !== d);
+      let best = null;
+      rows.forEach(r => {
+        if (!r.full[d]) return;
+        if (!best || r.cov[other] > best.cov[other] + 0.01) best = r;
+      });
+      if (best) res.options.push({ label: d, delta: best.d, cov: best.cov });
+    });
+    let bestTot = rows[0];
+    rows.forEach(r => { if (r.tot > bestTot.tot + 0.01) bestTot = r; });
+    res.options.push({ label: 'max', delta: bestTot.d, cov: bestTot.cov });
+  }
+  res.bandW = {};
+  dirs.forEach(d => { res.bandW[d] = bands[d].reduce((a, b) => a + b.w, 0); });
+  return res;
+}
+
+function toggleOffsetCalc(i) {
+  cur.offsetCalc = (cur.offsetCalc === i) ? null : i;
+  renderSide();
+}
+
+function applyOffset(i, v) {
+  upd(() => { project.programs[cur.progIdx].data[i].offset = Math.round(v * 10) / 10; });
 }
 
 /* רצועת גל ירוק: שני קצוות מקבילים (הקדמי והאחורי) עם תחום מוצל ביניהם.
@@ -1521,10 +1659,18 @@ function renderSide() {
           value="${esc((d.greens || {})[ph.id] || '')}" onchange="setGreen(${i}, '${esc(ph.id)}', this.value)"></div>`;
     });
     h += `<tr><td>${esc(it2.name)}</td>
-      <td><input type="number" value="${d.offset || 0}" onchange="setOffset(${i}, this.value)"></td>
+      <td><input type="number" value="${d.offset || 0}" onchange="setOffset(${i}, this.value)">
+        <button class="mini ${cur.offsetCalc === i ? 'movesBtn active' : ''}" title="חישוב אופסט לכניסה לגל" onclick="toggleOffsetCalc(${i})">⚙</button></td>
       <td style="text-align:right">${cells}</td></tr>`;
   });
-  h += `</table>
+  h += `</table>`;
+
+  // פאנל פותר האופסט
+  if (cur.offsetCalc !== null && project.intersections[cur.offsetCalc]) {
+    h += renderOffsetPanel(cur.offsetCalc);
+  }
+
+  h += `
   <div class="hint">ירוק בזמן מקומי של הצומת (מדיאגרמת הפאזות); האופסט מזיז את כל הצומת בזמן המערכת. מקטע החוצה את סוף המחזור: למשל <bdo dir="ltr">58-2</bdo>. כמה מקטעים מופרדים בנקודה-פסיק.</div>
   </div></details>`;
 
@@ -1570,6 +1716,65 @@ function renderSide() {
   h += `</div></details>`;
 
   document.getElementById('side').innerHTML = h;
+}
+
+// פאנל תוצאות פותר האופסט לצומת i
+function renderOffsetPanel(i) {
+  const it = project.intersections[i];
+  const dirName = { 1: project.dir1Label, 2: project.dir2Label };
+  const res = offsetSolve(i);
+  let h = `<div style="border:1px solid #7c97ac;border-radius:4px;padding:6px 8px;margin:4px 0;background:#f2f7fb">
+    <b class="small">חישוב אופסט — ${esc(it.name)}</b>`;
+  if (res.error) {
+    h += `<div class="hint">${esc(res.error)}</div></div>`;
+    return h;
+  }
+  const fmtRun = r => r.len < 0.6 ? fmtSec(r.mid) : `${fmtSec(r.from)}–${fmtSec(r.to)}`;
+
+  res.dirs.forEach(d => {
+    const arr = res.bands[d].map(b => `${fmtSec(b.A)}–${fmtSec(mod(b.A + b.w, res.C))} (${fmtSec(b.w)} שנ')`).join(', ');
+    const grn = res.greens[d].map(g => `${fmtSec(g.gs)}–${fmtSec(mod(g.gs + g.gl, res.C))}`).join(', ');
+    const runs = res.runsDir[d];
+    h += `<div class="small" style="margin:4px 0;border-top:1px solid #d5dde4;padding-top:4px">
+      <b>${esc(dirName[d])}:</b> הגעת הגל ${arr} · ירוק מקומי ${grn}<br>
+      ${runs.length
+        ? 'אופסט כשר לכיוון זה: ' + runs.map(fmtRun).join(' ; ')
+        : '<span class="danger">אין אופסט שמכניס את הרצועה במלואה (הירוק צר מהרצועה)</span>'}
+    </div>`;
+  });
+  res.skipped.forEach(d => {
+    h += `<div class="hint">${esc(dirName[d])}: יש רצועה אך לא הוזנו זמני ירוק — הכיוון לא נכלל בחישוב.</div>`;
+  });
+
+  if (res.dirs.length > 1 && res.runsBoth.length) {
+    const best = res.runsBoth[0];
+    h += `<div class="small" style="border-top:1px solid #7c97ac;margin-top:4px;padding-top:4px">
+      <b>שני הכיוונים יחד:</b> טווח משותף ${res.runsBoth.map(fmtRun).join(' ; ')}<br>
+      <b>אופסט מומלץ: ${fmtSec(best.mid)}</b>
+      <button class="mini" onclick="applyOffset(${i}, ${best.mid})">החל</button></div>`;
+  } else if (res.dirs.length > 1) {
+    h += `<div class="small danger" style="border-top:1px solid #7c97ac;margin-top:4px;padding-top:4px">
+      <b>אין אופסט שמכניס את שני הכיוונים במלואם — חלופות:</b></div>`;
+    (res.options || []).forEach(op => {
+      const parts = res.dirs.map(d => {
+        const full = Math.abs(op.cov[d] - res.bandW[d]) < 0.1;
+        return `${esc(dirName[d])} ${full ? 'מלא' : fmtSec(op.cov[d]) + '/' + fmtSec(res.bandW[d]) + ' שנ\''}`;
+      }).join(' · ');
+      const title = op.label === 'max' ? 'כיסוי כולל מרבי' : 'עדיפות ל' + esc(dirName[op.label]);
+      h += `<div class="small" style="margin:2px 0">${title}: אופסט ${fmtSec(op.delta)} — ${parts}
+        <button class="mini" onclick="applyOffset(${i}, ${op.delta})">החל</button></div>`;
+    });
+  } else {
+    const d = res.dirs[0];
+    const runs = res.runsDir[d];
+    if (runs.length) {
+      h += `<div class="small" style="border-top:1px solid #7c97ac;margin-top:4px;padding-top:4px">
+        <b>אופסט מומלץ: ${fmtSec(runs[0].mid)}</b>
+        <button class="mini" onclick="applyOffset(${i}, ${runs[0].mid})">החל</button></div>`;
+    }
+  }
+  h += `<div class="hint">האופסט המחושב מחליף את האופסט הנוכחי של הצומת (החישוב אינו תלוי בערכו הנוכחי). לאחר החלה בדוק חזותית בתרשים.</div></div>`;
+  return h;
 }
 
 function renderAll() {
