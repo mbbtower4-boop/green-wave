@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מחולל תרשימי גל ירוק</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 14px;
+    background: #eef1f4;
+    color: #1c2733;
+    display: flex;
+    flex-direction: column;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  input, select, textarea { font-family: inherit; font-size: 13px; }
+  input[type=number] { width: 62px; }
+
+  /* סרגל עליון */
+  #topbar {
+    background: #17324d; color: #fff;
+    padding: 6px 12px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  #topbar h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+  #topbar .grow { flex: 1; }
+  #topbar button {
+    background: #2c567e; color: #fff; border: 1px solid #4b7196;
+    border-radius: 4px; padding: 4px 10px; font-size: 13px;
+  }
+  #topbar button:hover { background: #3a6b99; }
+  #ver { font-size: 11px; color: #9db6cc; }
+
+  /* פריסה */
+  #main { flex: 1; display: flex; min-height: 0; }
+  #side {
+    width: 380px; min-width: 380px;
+    background: #fff; border-inline-start: 1px solid #cfd8e0;
+    overflow-y: auto; padding: 8px 10px 40px;
+    order: 2;
+  }
+  #canvasWrap { flex: 1; overflow: auto; padding: 12px; order: 1; }
+  #diagBox { background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.15); display: inline-block; }
+  svg { display: block; }
+  svg.tool-active { cursor: crosshair; }
+
+  /* מקטעי צד */
+  details.sec { border: 1px solid #d5dde4; border-radius: 6px; margin-bottom: 8px; background: #fbfcfd; }
+  details.sec > summary {
+    cursor: pointer; font-weight: 600; padding: 6px 10px;
+    background: #e8eef3; border-radius: 6px; user-select: none;
+  }
+  details.sec[open] > summary { border-radius: 6px 6px 0 0; border-bottom: 1px solid #d5dde4; }
+  .secBody { padding: 8px 10px; }
+  .row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+  .row label { min-width: 0; }
+  .hint { font-size: 11px; color: #6b7a88; margin: 2px 0 6px; }
+  .small { font-size: 12px; }
+
+  /* רשימת צמתים */
+  .intRow {
+    display: flex; align-items: center; gap: 4px;
+    padding: 3px 6px; border-radius: 4px; margin-bottom: 2px;
+  }
+  .intRow.sel { background: #dcebf7; }
+  .intRow .nm { flex: 1; cursor: pointer; }
+  .mini { padding: 1px 6px; font-size: 12px; border: 1px solid #b8c4ce; background: #f2f5f8; border-radius: 3px; }
+  .mini:hover { background: #e2e9ef; }
+  .danger { color: #a3272d; }
+
+  table.tbl { border-collapse: collapse; width: 100%; margin: 4px 0; }
+  table.tbl th, table.tbl td { border: 1px solid #cfd8e0; padding: 3px 5px; font-size: 12px; text-align: center; }
+  table.tbl th { background: #eef2f6; font-weight: 600; }
+  table.tbl input[type=text] { width: 95%; min-width: 60px; border: none; background: transparent; text-align: center; }
+  table.tbl input[type=number] { width: 54px; border: none; background: transparent; text-align: center; }
+
+  .phaseGrid td:first-child { font-weight: 700; }
+
+  .toolBtn { border: 1px solid #7c97ac; background: #f2f7fb; border-radius: 4px; padding: 4px 8px; }
+  .toolBtn.active { background: #17324d; color: #fff; }
+  .movesBtn.active { background: #17324d; color: #fff; }
+
+  .bandRow { display: flex; gap: 4px; align-items: center; margin-bottom: 3px; font-size: 12px; }
+  .dirDot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+
+  /* הדפסה */
+  @media print {
+    @page { size: A4 landscape; margin: 8mm; }
+    body { background: #fff; }
+    #topbar, #side { display: none !important; }
+    #main { display: block; }
+    #canvasWrap { padding: 0; overflow: visible; }
+    #diagBox { box-shadow: none; }
+    svg { width: 100% !important; height: auto !important; }
+  }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>מחולל תרשימי גל ירוק</h1>
+  <span id="ver"></span>
+  <span class="grow"></span>
+  <button onclick="loadExample()">טען דוגמה</button>
+  <button onclick="saveJSON()">שמירת קובץ</button>
+  <button onclick="document.getElementById('fileInp').click()">טעינת קובץ</button>
+  <input type="file" id="fileInp" accept=".json" style="display:none" onchange="loadJSON(this)">
+  <button onclick="exportSVG()">ייצוא SVG</button>
+  <button onclick="exportPNG()">ייצוא PNG</button>
+  <button onclick="window.print()">הדפסה / PDF</button>
+</div>
+
+<div id="main">
+  <div id="canvasWrap"><div id="diagBox"></div></div>
+  <div id="side"></div>
+</div>
+
+<script>
+'use strict';
+/* ================================================================
+   מחולל תרשימי גל ירוק — תרשים דרך-זמן לציר מתואם
+   כלי מקומי, קובץ יחיד, ללא שרת. הנתונים נשמרים ב-localStorage
+   וניתנים לשמירה/טעינה כקובץ JSON.
+   פורמט התרשים בהשראת תרשימי הגל הירוק בתוכניות זמנים (ענבר):
+   ציר אופקי = מרחק, ציר אנכי = שניות מחזור, זוג סרגלים לכל צומת
+   (קו עצירה לכל כיוון), מלבני ירוק עם מספרי מופעים, קווי גל
+   מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
+   ================================================================ */
+
+const APP_VERSION = '1.3.0';
+
+/* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
+   מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
+   פסי רקע מתחלפים לכל מחזור, מסגרת. */
+const STYLE = {
+  frame: '#c9d4de',
+  grid: '#e8ecf0', cycleLine: '#9fb0bf', cycleBand: '#f4f7fa',
+  timeLbl: '#33475b',
+  ruler: '#8494a3',
+  bar: '#3fae6e', barEdge: '#1e7a47', barTxt: '#ffffff',
+  dir1: '#1565c0', dir2: '#e65100',
+  sketchLine: '#4a5a68', phCircle: '#17324d', phTxt: '#ffffff',
+  dim: '#5a6a78'
+};
+const LS_KEY = 'greenwave_project_v1';
+
+/* ---------- מודל נתונים ---------- */
+
+function newPhase(id) {
+  return { id: id, dir1: false, dir2: false, moves: '' };
+}
+
+function newIntersection(name) {
+  return {
+    name: name || 'צומת חדש',
+    distPrev: 150,   // מרחק מקו העצירה האחרון של הצומת הקודם [מ']
+    gap: 25,         // מרחק בין שני קווי העצירה בצומת [מ']
+    phases: [ Object.assign(newPhase('1'), { dir1: true, dir2: true, moves: 'S:T, N:T' }) ]
+  };
+}
+
+function newProgramData() { return { offset: 0, greens: {} }; }
+
+function newProgram(name, cycle, nInts) {
+  return {
+    name: name || 'תוכנית',
+    cycle: cycle || 90,
+    data: Array.from({ length: nInts }, newProgramData),
+    bands: []   // { m, t, speed, dir }
+  };
+}
+
+function defaultProject() {
+  const p = {
+    name: 'ציר חדש',
+    dir1Label: 'צפונה',
+    dir2Label: 'דרומה',
+    dir1Compass: 'N',     // הכיוון הגאוגרפי שכיוון א' נוסע אליו (N/S/E/W)
+    rtlAxis: true,        // הצומת הראשון בצד ימין
+    cyclesShown: 1.75,    // כמה מחזורים מוצגים בציר הזמן
+    diagWidth: 1500,      // רוחב אזור השרטוט בפיקסלים
+    pxPerSec: 3.2,
+    showSketches: true,
+    intersections: [ newIntersection('צומת א'), newIntersection('צומת ב') ],
+    programs: []
+  };
+  p.programs.push(newProgram('תוכנית 1', 90, p.intersections.length));
+  return p;
+}
+
+let project = defaultProject();
+let cur = { progIdx: 0, selInt: 0, tool: null, toolSpeed: 50, dragBand: null, movesEdit: null };
+
+/* ---------- שמירה / טעינה ---------- */
+
+let saveTimer = null;
+function persist() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(project)); } catch (e) {}
+  }, 300);
+}
+
+function restore() {
+  try {
+    const s = localStorage.getItem(LS_KEY);
+    if (s) project = JSON.parse(s);
+  } catch (e) {}
+}
+
+function saveJSON() {
+  const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (project.name || 'green-wave') + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function loadJSON(inp) {
+  const f = inp.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      project = JSON.parse(r.result);
+      cur.progIdx = 0; cur.selInt = 0; cur.tool = null;
+      persist(); renderAll();
+    } catch (e) { alert('קובץ לא תקין: ' + e.message); }
+  };
+  r.readAsText(f);
+  inp.value = '';
+}
+
+/* ---------- עזרי חישוב ---------- */
+
+// "7-34; 58-2" → [[7,34],[58,2]] (מעבר דרך סוף המחזור מותר)
+function parseIntervals(str) {
+  if (!str) return [];
+  const out = [];
+  String(str).split(/[;,]+/).forEach(part => {
+    const m = part.trim().match(/^(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)$/);
+    if (m) out.push([+m[1], +m[2]]);
+  });
+  return out;
+}
+
+function intervalDur(s, e, cycle) { return e >= s ? e - s : cycle - s + e; }
+
+function mod(a, n) { return ((a % n) + n) % n; }
+
+// מיקומי הסרגלים במטרים: לכל צומת [a,b]; a = קו העצירה של כיוון 1
+function rulerPositions() {
+  const pos = [];
+  let m = 0;
+  project.intersections.forEach((it, i) => {
+    if (i > 0) m += Math.max(1, +it.distPrev || 0);
+    const a = m;
+    const b = m + Math.max(1, +it.gap || 0);
+    pos.push({ a, b });
+    m = b;
+  });
+  return pos;
+}
+
+/* ---------- גיאומטריית התרשים ---------- */
+
+const G = {}; // מחושב מחדש בכל רינדור
+
+function computeGeometry() {
+  const prog = project.programs[cur.progIdx];
+  G.cycle = +prog.cycle || 90;
+  G.span = G.cycle * (+project.cyclesShown || 1.75);
+  G.pxSec = +project.pxPerSec || 3.2;
+  G.sketchH = project.showSketches ? 150 : 0;
+  G.titleH = 44;
+  G.ML = 58; G.MR = 58;
+  G.topY = G.titleH + G.sketchH + 14;
+  G.diagH = G.span * G.pxSec;
+  G.botH = 92;
+  G.W = Math.max(700, +project.diagWidth || 1500);
+  G.H = G.topY + G.diagH + G.botH;
+  G.pos = rulerPositions();
+  G.totalM = G.pos.length ? G.pos[G.pos.length - 1].b : 1;
+  G.sx = (G.W - G.ML - G.MR) / Math.max(1, G.totalM);
+}
+
+function mx(m) { // מטר → פיקסל X
+  return project.rtlAxis ? (G.W - G.MR - m * G.sx) : (G.ML + m * G.sx);
+}
+function xm(px) { // פיקסל X → מטר
+  return project.rtlAxis ? (G.W - G.MR - px) / G.sx : (px - G.ML) / G.sx;
+}
+function ty(t) { return G.topY + G.diagH - t * G.pxSec; } // שנייה → פיקסל Y
+function yt(py) { return (G.topY + G.diagH - py) / G.pxSec; }
+
+/* ---------- בניית ה-SVG ---------- */
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+let snapPoints = []; // נקודות הצמדה: פינות מלבני ירוק
+
+function buildSVG() {
+  computeGeometry();
+  const prog = project.programs[cur.progIdx];
+  snapPoints = [];
+  let s = '';
+
+  // רקע
+  s += `<rect x="0" y="0" width="${G.W}" height="${G.H}" fill="#ffffff"/>`;
+
+  // כותרת
+  s += `<text x="${G.W / 2}" y="26" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c2733">` +
+       `${esc(project.name)} — ${esc(prog.name)} — מחזור ${G.cycle} שנ'</text>`;
+
+  // חץ צפון (הסקיצות מצוירות כשצפון למעלה)
+  if (project.showSketches) {
+    const nx = project.rtlAxis ? G.ML + 26 : G.W - G.MR - 26;
+    const nTop = G.titleH + 10, nBot = nTop + 32;
+    s += `<line x1="${nx}" y1="${nBot}" x2="${nx}" y2="${nTop + 9}" stroke="#1c2733" stroke-width="1.6"/>`;
+    s += `<path d="M ${nx} ${nTop} L ${nx - 5} ${nTop + 12} L ${nx + 5} ${nTop + 12} Z" fill="#1c2733"/>`;
+    s += `<text x="${nx}" y="${nBot + 15}" text-anchor="middle" font-size="12" font-weight="bold" fill="#1c2733">צפון</text>`;
+  }
+
+  // תוויות כיוון נסיעה בקצות התרשים (כיוון א' נוסע מהצומת הראשון לאחרון)
+  const yDir = G.topY - 6;
+  const leftX = G.ML + 2, rightX = G.W - G.MR - 2;
+  if (project.rtlAxis) {
+    s += `<text x="${leftX}" y="${yDir}" text-anchor="start" font-size="13" font-weight="bold" fill="${STYLE.dir1}">◄ ${esc(project.dir1Label)}</text>`;
+    s += `<text x="${rightX}" y="${yDir}" text-anchor="end" font-size="13" font-weight="bold" fill="${STYLE.dir2}">${esc(project.dir2Label)} ►</text>`;
+  } else {
+    s += `<text x="${rightX}" y="${yDir}" text-anchor="end" font-size="13" font-weight="bold" fill="${STYLE.dir1}">${esc(project.dir1Label)} ►</text>`;
+    s += `<text x="${leftX}" y="${yDir}" text-anchor="start" font-size="13" font-weight="bold" fill="${STYLE.dir2}">◄ ${esc(project.dir2Label)}</text>`;
+  }
+
+  // פסי רקע מתחלפים לכל מחזור + קו מודגש בגבול מחזור
+  for (let k = 0; k * G.cycle < G.span; k++) {
+    if (k % 2 === 1) {
+      const t0 = k * G.cycle, t1 = Math.min((k + 1) * G.cycle, G.span);
+      s += `<rect x="${G.ML}" y="${ty(t1)}" width="${G.W - G.ML - G.MR}" height="${(t1 - t0) * G.pxSec}" fill="${STYLE.cycleBand}"/>`;
+    }
+  }
+
+  // קווי רשת אופקיים + תוויות זמן משני הצדדים
+  for (let t = 0; t <= G.span + 0.001; t += 10) {
+    const y = ty(t);
+    const lbl = mod(t, G.cycle);
+    const isWrap = (t > 0 && lbl === 0);
+    const txt = isWrap ? `0/${G.cycle}` : String(Math.round(lbl));
+    s += `<line x1="${G.ML}" y1="${y}" x2="${G.W - G.MR}" y2="${y}" stroke="${isWrap ? STYLE.cycleLine : STYLE.grid}" stroke-width="${isWrap ? 1.4 : 1}"/>`;
+    const w = isWrap ? ' font-weight="bold"' : '';
+    s += `<text x="${G.ML - 8}" y="${y + 4}" text-anchor="end" font-size="11" fill="${STYLE.timeLbl}"${w}>${txt}</text>`;
+    s += `<text x="${G.W - G.MR + 8}" y="${y + 4}" text-anchor="start" font-size="11" fill="${STYLE.timeLbl}"${w}>${txt}</text>`;
+  }
+
+  // מסגרת אזור השרטוט
+  s += `<rect x="${G.ML}" y="${G.topY}" width="${G.W - G.ML - G.MR}" height="${G.diagH}" fill="none" stroke="${STYLE.frame}" stroke-width="1.2"/>`;
+
+  // אזור חיתוך לקווי הגל
+  s += `<defs><clipPath id="diagClip"><rect x="${G.ML}" y="${G.topY}" width="${G.W - G.ML - G.MR}" height="${G.diagH}"/></clipPath></defs>`;
+
+  // קווי גל (מתחת למלבנים כדי שלא יסתירו מספרים)
+  s += `<g clip-path="url(#diagClip)">` + buildBands(prog) + `</g>`;
+
+  // סרגלים, מלבני ירוק, מידות, שמות, סקיצות
+  project.intersections.forEach((it, i) => {
+    const p = G.pos[i];
+    const d = prog.data[i] || newProgramData();
+    s += buildRuler(mx(p.a));
+    s += buildRuler(mx(p.b));
+    s += buildGreens(it, d, p, prog);
+    if (project.showSketches) s += buildSketch(it, (mx(p.a) + mx(p.b)) / 2);
+    // שם הצומת
+    const cx = (mx(p.a) + mx(p.b)) / 2;
+    const nameY = G.topY + G.diagH + 58;
+    const parts = String(it.name).split('/');
+    parts.forEach((pt, k) => {
+      s += `<text x="${cx}" y="${nameY + k * 15}" text-anchor="middle" font-size="13" font-weight="bold" fill="#1c2733">${esc(pt.trim())}</text>`;
+    });
+  });
+
+  // שורת מידות (בין כל זוג סרגלים סמוכים)
+  s += buildDimensions();
+
+  // חותרת קטנה
+  s += `<text x="${project.rtlAxis ? G.W - 8 : 8}" y="${G.H - 6}" text-anchor="${project.rtlAxis ? 'end' : 'start'}" font-size="10" fill="#8a97a3">` +
+       `מחולל תרשימי גל ירוק v${APP_VERSION}</text>`;
+
+  return `<svg id="diagram" xmlns="http://www.w3.org/2000/svg" width="${G.W}" height="${G.H}" viewBox="0 0 ${G.W} ${G.H}" font-family="Segoe UI, Arial, sans-serif">${s}</svg>`;
+}
+
+function buildRuler(x) {
+  let s = `<line x1="${x}" y1="${ty(G.span)}" x2="${x}" y2="${ty(0)}" stroke="${STYLE.ruler}" stroke-width="1"/>`;
+  for (let t = 0; t <= G.span + 0.001; t += 5) {
+    const y = ty(t);
+    const major = mod(t, 10) === 0;
+    const half = major ? 5 : 2.5;
+    s += `<line x1="${x - half}" y1="${y}" x2="${x + half}" y2="${y}" stroke="${STYLE.ruler}" stroke-width="${major ? 1 : 0.7}"/>`;
+  }
+  return s;
+}
+
+function buildGreens(it, d, p, prog) {
+  let s = '';
+  const off = +d.offset || 0;
+  const reps = Math.ceil(G.span / G.cycle) + 1;
+  it.phases.forEach(ph => {
+    const ivs = parseIntervals((d.greens || {})[ph.id]);
+    ivs.forEach(([gs, ge]) => {
+      const dur = intervalDur(gs, ge, G.cycle);
+      if (dur <= 0) return;
+      const sysStart = mod(gs + off, G.cycle);
+      [['dir1', p.a], ['dir2', p.b]].forEach(([dk, m]) => {
+        if (!ph[dk]) return;
+        const x = mx(m);
+        for (let k = -1; k <= reps; k++) {
+          const t0 = sysStart + k * G.cycle;
+          const t1 = t0 + dur;
+          if (t1 <= 0 || t0 >= G.span) continue;
+          const c0 = Math.max(0, t0), c1 = Math.min(G.span, t1);
+          const yTop = ty(c1), h = (c1 - c0) * G.pxSec;
+          s += `<rect x="${x - 8}" y="${yTop}" width="16" height="${h}" rx="3" fill="${STYLE.bar}" stroke="${STYLE.barEdge}" stroke-width="1"/>`;
+          if (h > 13) {
+            s += `<text x="${x}" y="${yTop + h / 2 + 4}" text-anchor="middle" font-size="11" font-weight="bold" fill="${STYLE.barTxt}">${esc(ph.id)}</text>`;
+          }
+          // נקודות הצמדה — תחילת/סוף ירוק בתחום המוצג
+          if (t0 >= 0 && t0 <= G.span) snapPoints.push({ m, t: t0 });
+          if (t1 >= 0 && t1 <= G.span) snapPoints.push({ m, t: t1 });
+        }
+      });
+    });
+  });
+  return s;
+}
+
+function buildBands(prog) {
+  let s = '';
+  (prog.bands || []).forEach((b, bi) => {
+    const v = Math.max(1, +b.speed || 30) / 3.6;        // מ'/שנ'
+    const slope = (b.dir === 2 ? -1 : 1) / v;            // שנ' למטר בכיוון +m
+    const col = b.dir === 2 ? STYLE.dir2 : STYLE.dir1;
+    const reps = Math.ceil(G.span / G.cycle) + 1;
+    for (let k = -reps; k <= reps; k++) {
+      const t0 = (+b.t || 0) + k * G.cycle - (+b.m || 0) * slope; // t בנקודה m=0
+      const tEnd = t0 + G.totalM * slope;
+      const x1 = mx(0), y1 = ty(t0), x2 = mx(G.totalM), y2 = ty(tEnd);
+      // דילוג על קווים שמחוץ לתחום לגמרי
+      if (Math.max(t0, tEnd) < 0 || Math.min(t0, tEnd) > G.span) continue;
+      s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}" stroke-width="1.5" stroke-dasharray="${b.dir === 2 ? '3 4' : '10 4'}"/>`;
+      // קו שקוף רחב לאינטראקציה (גרירה / מחיקה)
+      s += `<line class="bandHit" data-band="${bi}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="rgba(0,0,0,0)" stroke-width="10" style="cursor:ns-resize"/>`;
+      if (k === 0) {
+        const lx = mx((+b.m || 0));
+        const lyT = (+b.t || 0);
+        s += `<text x="${lx + 12}" y="${ty(lyT) - 6}" font-size="11" fill="${col}">${Math.round(+b.speed)}</text>`;
+      }
+    }
+  });
+  return s;
+}
+
+function buildDimensions() {
+  let s = '';
+  const y = G.topY + G.diagH + 22;
+  const edges = [];
+  G.pos.forEach((p, i) => {
+    edges.push([p.a, p.b, project.intersections[i].gap]);
+    if (i < G.pos.length - 1) edges.push([p.b, G.pos[i + 1].a, project.intersections[i + 1].distPrev]);
+  });
+  edges.forEach(([m1, m2, val]) => {
+    const x1 = mx(m1), x2 = mx(m2);
+    const xa = Math.min(x1, x2), xb = Math.max(x1, x2);
+    s += `<line x1="${xa}" y1="${y}" x2="${xb}" y2="${y}" stroke="${STYLE.dim}" stroke-width="0.8"/>`;
+    s += `<line x1="${xa}" y1="${y - 4}" x2="${xa}" y2="${y + 4}" stroke="${STYLE.dim}" stroke-width="0.8"/>`;
+    s += `<line x1="${xb}" y1="${y - 4}" x2="${xb}" y2="${y + 4}" stroke="${STYLE.dim}" stroke-width="0.8"/>`;
+    s += `<text x="${(xa + xb) / 2}" y="${y - 5}" text-anchor="middle" font-size="10.5" fill="${STYLE.dim}">${(+val).toFixed(1)}</text>`;
+  });
+  return s;
+}
+
+/* ---------- סקיצת צומת ---------- */
+
+// תנועות: "S:T, S:R, W:L" — זרוע (N/S/E/W) : תנועה (T ישר / L שמאלה / R ימינה)
+function parseMoves(str) {
+  const out = [];
+  if (!str) return out;
+  String(str).split(/[;,]+/).forEach(part => {
+    const m = part.trim().toUpperCase().match(/^([NSEW])\s*[:\-]\s*([TLR])$/);
+    if (m) out.push({ arm: m[1], mvt: m[2] });
+  });
+  return out;
+}
+
+const OPP_COMPASS = { N: 'S', S: 'N', E: 'W', W: 'E' };
+
+const ARM_HEB = { N: 'מצפון', S: 'מדרום', E: 'ממזרח', W: 'ממערב' };
+const MVT_HEB = { T: 'ישר', L: 'שמאלה', R: 'ימינה' };
+
+function movesSummary(str) {
+  const mv = parseMoves(str);
+  if (!mv.length) return '(אוטומטי)';
+  return mv.map(m => ARM_HEB[m.arm] + ' ' + MVT_HEB[m.mvt]).join(', ');
+}
+
+function buildSketch(it, cx) {
+  const cy = G.titleH + G.sketchH / 2 + 4;
+  const R = 52; // חצי גובה/רוחב הסקיצה
+  let s = '';
+  const c1 = project.dir1Compass || 'N';   // לאן נוסע כיוון א'
+  const c2 = OPP_COMPASS[c1];
+
+  // איסוף תנועות לפי זרוע, עם מספר המופע.
+  // מופע בלי תנועות מוגדרות מקבל חץ "ישר" אוטומטי לפי הכיוונים שהוא משרת.
+  const byArm = { N: [], S: [], E: [], W: [] };
+  it.phases.forEach(ph => {
+    const mv = parseMoves(ph.moves);
+    if (mv.length) {
+      mv.forEach(m => byArm[m.arm].push({ mvt: m.mvt, ph: ph.id }));
+    } else {
+      if (ph.dir1) byArm[OPP_COMPASS[c1]].push({ mvt: 'T', ph: ph.id });
+      if (ph.dir2) byArm[OPP_COMPASS[c2]].push({ mvt: 'T', ph: ph.id });
+    }
+  });
+
+  const hasNS = byArm.N.length || byArm.S.length;
+  const hasEW = byArm.E.length || byArm.W.length;
+  const corridorNS = (c1 === 'N' || c1 === 'S');
+
+  // צירי הדרכים: ציר הדרך המתואמת תמיד; הדרך החוצה — אם יש בה תנועות
+  if (corridorNS || hasNS) s += `<line x1="${cx}" y1="${cy - R}" x2="${cx}" y2="${cy + R}" stroke="${STYLE.sketchLine}" stroke-width="1"/>`;
+  if (!corridorNS || hasEW) s += `<line x1="${cx - R}" y1="${cy}" x2="${cx + R}" y2="${cy}" stroke="${STYLE.sketchLine}" stroke-width="1"/>`;
+
+  // חץ בודד: from (x,y) בכיוון (dx,dy), עם פנייה אופציונלית
+  function arrow(x, y, dx, dy, turn, phId) {
+    const L1 = 20, L2 = 13, hs = 3.5;
+    let path = `M ${x} ${y} l ${dx * L1} ${dy * L1}`;
+    let ex = x + dx * L1, ey = y + dy * L1, fdx = dx, fdy = dy;
+    if (turn) {
+      // סיבוב 90°: שמאלה = נגד כיוון השעון במסך? נקבע לפי וקטור
+      // עבור כיוון נסיעה (dx,dy): שמאלה = (dy,-dx), ימינה = (-dy,dx)
+      const t = turn === 'L' ? [dy, -dx] : [-dy, dx];
+      path += ` l ${t[0] * L2} ${t[1] * L2}`;
+      ex += t[0] * L2; ey += t[1] * L2; fdx = t[0]; fdy = t[1];
+    }
+    let a = `<path d="${path}" fill="none" stroke="${STYLE.sketchLine}" stroke-width="1.2"/>`;
+    // ראש חץ
+    const px = -fdy, py = fdx;
+    a += `<path d="M ${ex + fdx * 5} ${ey + fdy * 5} L ${ex - fdx * 2 + px * hs} ${ey - fdy * 2 + py * hs} L ${ex - fdx * 2 - px * hs} ${ey - fdy * 2 - py * hs} Z" fill="${STYLE.sketchLine}"/>`;
+    // עיגול מספר מופע בזנב — מלא, מספר לבן
+    a += `<circle cx="${x - dx * 9}" cy="${y - dy * 9}" r="7" fill="${STYLE.phCircle}"/>`;
+    a += `<text x="${x - dx * 9}" y="${y - dy * 9 + 3.5}" text-anchor="middle" font-size="9" font-weight="bold" fill="${STYLE.phTxt}">${esc(phId)}</text>`;
+    return a;
+  }
+
+  // מיקומי פתיחה לפי זרוע: נסיעה ימנית — הנתיבים בצד ימין של הכיוון
+  const lanes = { S: 0, N: 0, E: 0, W: 0 };
+  ['S', 'N', 'E', 'W'].forEach(arm => {
+    byArm[arm].forEach(mv => {
+      const i = lanes[arm]++;
+      if (arm === 'S') s += arrow(cx + 8 + i * 13, cy + R - 8, 0, -1, mv.mvt === 'T' ? null : mv.mvt, mv.ph);
+      if (arm === 'N') s += arrow(cx - 8 - i * 13, cy - R + 8, 0, 1, mv.mvt === 'T' ? null : mv.mvt, mv.ph);
+      if (arm === 'E') s += arrow(cx + R - 8, cy - 8 - i * 13, -1, 0, mv.mvt === 'T' ? null : mv.mvt, mv.ph);
+      if (arm === 'W') s += arrow(cx - R + 8, cy + 8 + i * 13, 1, 0, mv.mvt === 'T' ? null : mv.mvt, mv.ph);
+    });
+  });
+
+  return s;
+}
+
+/* ---------- אינטראקציית קווי גל ---------- */
+
+function svgPoint(e) {
+  const svg = document.getElementById('diagram');
+  const pt = svg.createSVGPoint();
+  pt.x = e.clientX; pt.y = e.clientY;
+  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+  return p;
+}
+
+function onSvgClick(e) {
+  if (!cur.tool) return;
+  const sp0 = document.getElementById('toolSpeed');
+  if (sp0) cur.toolSpeed = +sp0.value || cur.toolSpeed;
+  const p = svgPoint(e);
+  let m = xm(p.x), t = yt(p.y);
+  if (m < 0 || m > G.totalM || t < 0 || t > G.span) return;
+  // הצמדה לפינת ירוק קרובה (עד 12px)
+  let best = null, bestD = 12;
+  snapPoints.forEach(sp => {
+    const d = Math.hypot(mx(sp.m) - p.x, ty(sp.t) - p.y);
+    if (d < bestD) { bestD = d; best = sp; }
+  });
+  if (best) { m = best.m; t = best.t; }
+  const prog = project.programs[cur.progIdx];
+  prog.bands.push({ m: Math.round(m * 10) / 10, t: Math.round(t * 10) / 10, speed: cur.toolSpeed, dir: cur.tool });
+  cur.tool = null;
+  persist(); renderAll();
+}
+
+function onSvgPointerDown(e) {
+  const el = e.target;
+  if (el.classList && el.classList.contains('bandHit')) {
+    e.preventDefault();
+    cur.dragBand = { idx: +el.dataset.band, startY: e.clientY, startT: +project.programs[cur.progIdx].bands[+el.dataset.band].t };
+    window.addEventListener('pointermove', onDragMove);
+    window.addEventListener('pointerup', onDragEnd);
+  }
+}
+
+function onDragMove(e) {
+  if (!cur.dragBand) return;
+  const svg = document.getElementById('diagram');
+  const scale = svg.getBoundingClientRect().height / G.H;
+  const dt = (cur.dragBand.startY - e.clientY) / (G.pxSec * scale) * -1;
+  const b = project.programs[cur.progIdx].bands[cur.dragBand.idx];
+  b.t = Math.round((cur.dragBand.startT - dt) * 10) / 10;
+  renderDiagram();
+}
+
+function onDragEnd() {
+  window.removeEventListener('pointermove', onDragMove);
+  window.removeEventListener('pointerup', onDragEnd);
+  if (cur.dragBand) { cur.dragBand = null; persist(); renderSide(); }
+}
+
+function onSvgDblClick(e) {
+  const el = e.target;
+  if (el.classList && el.classList.contains('bandHit')) {
+    const i = +el.dataset.band;
+    if (confirm('למחוק את קו הגל?')) {
+      project.programs[cur.progIdx].bands.splice(i, 1);
+      persist(); renderAll();
+    }
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && cur.tool) { cur.tool = null; renderAll(); }
+});
+
+/* ---------- פעולות עריכה ---------- */
+
+function upd(fn) { fn(); persist(); renderAll(); }
+function updDiagram(fn) { fn(); persist(); renderDiagram(); }
+
+function setProj(key, val) { upd(() => { project[key] = val; }); }
+function setProjNum(key, val) { upd(() => { project[key] = +val; }); }
+
+function selInt(i) { cur.selInt = i; cur.movesEdit = null; renderSide(); }
+
+function toggleMovesEdit(i, pi) {
+  cur.movesEdit = (cur.movesEdit && cur.movesEdit.i === i && cur.movesEdit.pi === pi) ? null : { i: i, pi: pi };
+  renderSide();
+}
+
+function toggleMove(i, pi, arm, mvt, on) {
+  upd(() => {
+    const ph = project.intersections[i].phases[pi];
+    const mv = parseMoves(ph.moves).filter(m => !(m.arm === arm && m.mvt === mvt));
+    if (on) mv.push({ arm: arm, mvt: mvt });
+    ph.moves = mv.map(m => m.arm + ':' + m.mvt).join(', ');
+  });
+}
+
+function addIntersection() {
+  upd(() => {
+    project.intersections.push(newIntersection('צומת ' + (project.intersections.length + 1)));
+    project.programs.forEach(pr => pr.data.push(newProgramData()));
+    cur.selInt = project.intersections.length - 1;
+  });
+}
+
+function delIntersection(i) {
+  if (!confirm('למחוק את הצומת "' + project.intersections[i].name + '"?')) return;
+  upd(() => {
+    project.intersections.splice(i, 1);
+    project.programs.forEach(pr => pr.data.splice(i, 1));
+    cur.selInt = Math.max(0, Math.min(cur.selInt, project.intersections.length - 1));
+  });
+}
+
+function moveIntersection(i, d) {
+  const j = i + d;
+  if (j < 0 || j >= project.intersections.length) return;
+  upd(() => {
+    const arr = project.intersections;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    project.programs.forEach(pr => { [pr.data[i], pr.data[j]] = [pr.data[j], pr.data[i]]; });
+    cur.selInt = j;
+  });
+}
+
+function setIntField(i, key, val) {
+  upd(() => { project.intersections[i][key] = (key === 'name') ? val : +val; });
+}
+
+function addPhase(i) {
+  upd(() => {
+    const it = project.intersections[i];
+    const used = new Set(it.phases.map(p => p.id));
+    let n = 1; while (used.has(String(n))) n++;
+    it.phases.push(newPhase(String(n)));
+  });
+}
+
+function delPhase(i, pi) {
+  upd(() => { project.intersections[i].phases.splice(pi, 1); cur.movesEdit = null; });
+}
+
+function setPhaseField(i, pi, key, val) {
+  upd(() => {
+    const ph = project.intersections[i].phases[pi];
+    if (key === 'dir1' || key === 'dir2') { ph[key] = !!val; return; }
+    if (key === 'id' && val !== ph.id) {
+      // העברת ירוקים שהוזנו תחת השם הישן בכל התוכניות
+      project.programs.forEach(pr => {
+        const d = pr.data[i];
+        if (d && d.greens && d.greens[ph.id] !== undefined) {
+          d.greens[val] = d.greens[ph.id];
+          delete d.greens[ph.id];
+        }
+      });
+    }
+    ph[key] = val;
+  });
+}
+
+function selProgram(i) { cur.progIdx = +i; renderAll(); }
+
+function addProgram() {
+  upd(() => {
+    project.programs.push(newProgram('תוכנית ' + (project.programs.length + 1), 90, project.intersections.length));
+    cur.progIdx = project.programs.length - 1;
+  });
+}
+
+function dupProgram() {
+  upd(() => {
+    const cp = JSON.parse(JSON.stringify(project.programs[cur.progIdx]));
+    cp.name += ' (עותק)';
+    project.programs.push(cp);
+    cur.progIdx = project.programs.length - 1;
+  });
+}
+
+function delProgram() {
+  if (project.programs.length <= 1) { alert('חייבת להישאר תוכנית אחת לפחות.'); return; }
+  if (!confirm('למחוק את התוכנית "' + project.programs[cur.progIdx].name + '"?')) return;
+  upd(() => {
+    project.programs.splice(cur.progIdx, 1);
+    cur.progIdx = Math.max(0, cur.progIdx - 1);
+  });
+}
+
+function setProgField(key, val) {
+  upd(() => { project.programs[cur.progIdx][key] = (key === 'name') ? val : +val; });
+}
+
+function setOffset(i, val) {
+  upd(() => { project.programs[cur.progIdx].data[i].offset = +val; });
+}
+
+function setGreen(i, phId, val) {
+  upd(() => {
+    const d = project.programs[cur.progIdx].data[i];
+    if (!d.greens) d.greens = {};
+    d.greens[phId] = val;
+  });
+}
+
+function setBandField(bi, key, val) {
+  updDiagram(() => { project.programs[cur.progIdx].bands[bi][key] = +val; });
+}
+
+function delBand(bi) {
+  upd(() => { project.programs[cur.progIdx].bands.splice(bi, 1); });
+}
+
+function startBandTool(dir) {
+  cur.tool = (cur.tool === dir) ? null : dir;
+  const sp = document.getElementById('toolSpeed');
+  if (sp) cur.toolSpeed = +sp.value || 50;
+  renderAll();
+}
+
+/* ---------- ייצוא ---------- */
+
+function svgSource() {
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' + document.getElementById('diagram').outerHTML;
+}
+
+function exportSVG() {
+  const blob = new Blob([svgSource()], { type: 'image/svg+xml' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = fileBase() + '.svg';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function exportPNG() {
+  const img = new Image();
+  const blob = new Blob([svgSource()], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  img.onload = () => {
+    const scale = 2;
+    const c = document.createElement('canvas');
+    c.width = G.W * scale; c.height = G.H * scale;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(url);
+    c.toBlob(b => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = fileBase() + '.png';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+  };
+  img.src = url;
+}
+
+function fileBase() {
+  const prog = project.programs[cur.progIdx];
+  return ('גל_ירוק_' + project.name + '_' + prog.name).replace(/[\\/:*?"<>|\s]+/g, '_');
+}
+
+/* ---------- דוגמה ---------- */
+
+function loadExample() {
+  if (!confirm('טעינת הדוגמה תחליף את הפרויקט הנוכחי (שמור קודם אם צריך). להמשיך?')) return;
+  const p = defaultProject();
+  p.name = 'ציר הרצל (דוגמה)';
+  p.dir1Label = 'צפונה'; p.dir2Label = 'דרומה';
+  p.intersections = [];
+
+  function mk(name, distPrev, gap, phases) {
+    const it = newIntersection(name);
+    it.distPrev = distPrev; it.gap = gap;
+    it.phases = phases;
+    return it;
+  }
+  function ph(id, dir1, dir2, moves) {
+    return { id, dir1, dir2, moves };
+  }
+
+  p.intersections.push(
+    mk('הרצל/זבוטינסקי', 0, 30, [
+      ph('1', true, true, 'S:T, N:T'),
+      ph('2', false, false, 'W:T, W:L'),
+      ph('4', false, false, 'E:T, E:R')
+    ]),
+    mk('הרצל/טיומקין', 150, 25, [
+      ph('1', true, true, 'S:T, N:T'),
+      ph('2', false, false, 'W:T')
+    ]),
+    mk('הרצל/הכרמל', 75, 30, [
+      ph('1', true, true, 'S:T, N:T'),
+      ph('2', false, false, 'E:T, E:L')
+    ]),
+    mk('הרצל/רוטשילד', 205, 20, [
+      ph('1', true, true, 'S:T, N:T'),
+      ph('2', true, false, 'N:R'),
+      ph('4', false, false, 'W:L')
+    ])
+  );
+
+  const pr = newProgram('שיא אחה"צ', 90, 4);
+  pr.data = [
+    { offset: 0,  greens: { '1': '0-42', '2': '48-64', '4': '68-86' } },
+    { offset: 12, greens: { '1': '0-50', '2': '55-84' } },
+    { offset: 20, greens: { '1': '0-48', '2': '54-84' } },
+    { offset: 42, greens: { '1': '0-40', '2': '0-40', '4': '46-62' } }
+  ];
+  pr.bands = [
+    { m: 0,   t: 2,  speed: 50, dir: 1 },
+    { m: 535, t: 44, speed: 50, dir: 2 }
+  ];
+  p.programs = [pr];
+
+  project = p;
+  cur = { progIdx: 0, selInt: 0, tool: null, toolSpeed: 50, dragBand: null };
+  persist(); renderAll();
+}
+
+/* ---------- רינדור ממשק ---------- */
+
+function renderDiagram() {
+  const box = document.getElementById('diagBox');
+  box.innerHTML = buildSVG();
+  const svg = document.getElementById('diagram');
+  if (cur.tool) svg.classList.add('tool-active');
+  svg.addEventListener('click', onSvgClick);
+  svg.addEventListener('pointerdown', onSvgPointerDown);
+  svg.addEventListener('dblclick', onSvgDblClick);
+}
+
+function renderSide() {
+  const prog = project.programs[cur.progIdx];
+  let h = '';
+
+  /* --- פרויקט --- */
+  h += `<details class="sec" open><summary>פרטי הציר</summary><div class="secBody">
+    <div class="row"><label>שם:</label>
+      <input type="text" style="width:200px" value="${esc(project.name)}" onchange="setProj('name', this.value)"></div>
+    <div class="row"><label>כיוון א' (כחול):</label>
+      <input type="text" style="width:90px" value="${esc(project.dir1Label)}" onchange="setProj('dir1Label', this.value)">
+      <label>כיוון ב' (כתום):</label>
+      <input type="text" style="width:90px" value="${esc(project.dir2Label)}" onchange="setProj('dir2Label', this.value)"></div>
+    <div class="row"><label>כיוון א' נוסע:</label>
+      <select onchange="setProj('dir1Compass', this.value)">
+        ${[['N', 'צפונה'], ['S', 'דרומה'], ['E', 'מזרחה'], ['W', 'מערבה']].map(([v, t]) =>
+          `<option value="${v}" ${(project.dir1Compass || 'N') === v ? 'selected' : ''}>${t}</option>`).join('')}
+      </select>
+      <span class="hint">קובע את כיוון הציר בסקיצות (צפון תמיד למעלה)</span></div>
+    <div class="row"><label><input type="checkbox" ${project.rtlAxis ? 'checked' : ''} onchange="setProj('rtlAxis', this.checked)"> הצומת הראשון מימין</label>
+      <label><input type="checkbox" ${project.showSketches ? 'checked' : ''} onchange="setProj('showSketches', this.checked)"> סקיצות צמתים</label></div>
+    <div class="row"><label>מחזורים בציר הזמן:</label>
+      <select onchange="setProjNum('cyclesShown', this.value)">
+        ${[1.25, 1.5, 1.75, 2].map(v => `<option value="${v}" ${project.cyclesShown == v ? 'selected' : ''}>${v}</option>`).join('')}
+      </select>
+      <label>רוחב (px):</label><input type="number" min="700" step="100" value="${project.diagWidth}" onchange="setProjNum('diagWidth', this.value)">
+      <label>px/שנ':</label><input type="number" min="1" step="0.2" value="${project.pxPerSec}" onchange="setProjNum('pxPerSec', this.value)"></div>
+    <div class="hint">כיוון א' נוסע מהצומת הראשון לאחרון (קו העצירה הקרוב לצומת הקודם); כיוון ב' — הפוך.</div>
+  </div></details>`;
+
+  /* --- צמתים --- */
+  h += `<details class="sec" open><summary>צמתים (${project.intersections.length})</summary><div class="secBody">`;
+  project.intersections.forEach((it, i) => {
+    h += `<div class="intRow ${i === cur.selInt ? 'sel' : ''}">
+      <span class="nm" onclick="selInt(${i})">${i + 1}. ${esc(it.name)}</span>
+      <button class="mini" onclick="moveIntersection(${i},-1)" title="הזז למעלה">▲</button>
+      <button class="mini" onclick="moveIntersection(${i},1)" title="הזז למטה">▼</button>
+      <button class="mini danger" onclick="delIntersection(${i})">✕</button>
+    </div>`;
+  });
+  h += `<button class="mini" onclick="addIntersection()">+ הוסף צומת</button>`;
+
+  const it = project.intersections[cur.selInt];
+  if (it) {
+    const i = cur.selInt;
+    h += `<hr style="border:none;border-top:1px solid #d5dde4;margin:8px 0">`;
+    h += `<div class="row"><label>שם:</label>
+      <input type="text" style="width:180px" value="${esc(it.name)}" onchange="setIntField(${i},'name',this.value)"></div>`;
+    h += `<div class="row">
+      <label>מרחק מהקודם (מ'):</label><input type="number" min="1" ${i === 0 ? 'disabled' : ''} value="${it.distPrev}" onchange="setIntField(${i},'distPrev',this.value)">
+      <label>בין קווי עצירה (מ'):</label><input type="number" min="1" value="${it.gap}" onchange="setIntField(${i},'gap',this.value)"></div>`;
+    h += `<table class="tbl phaseGrid"><tr><th>מופע</th><th>${esc(project.dir1Label)}</th><th>${esc(project.dir2Label)}</th><th>תנועות (לסקיצה)</th><th></th></tr>`;
+    it.phases.forEach((ph, pi) => {
+      const editing = cur.movesEdit && cur.movesEdit.i === i && cur.movesEdit.pi === pi;
+      h += `<tr>
+        <td><input type="text" style="width:34px" value="${esc(ph.id)}" onchange="setPhaseField(${i},${pi},'id',this.value)"></td>
+        <td><input type="checkbox" ${ph.dir1 ? 'checked' : ''} onchange="setPhaseField(${i},${pi},'dir1',this.checked)"></td>
+        <td><input type="checkbox" ${ph.dir2 ? 'checked' : ''} onchange="setPhaseField(${i},${pi},'dir2',this.checked)"></td>
+        <td><button class="mini movesBtn ${editing ? 'active' : ''}" style="width:100%;text-align:right" onclick="toggleMovesEdit(${i},${pi})">${esc(movesSummary(ph.moves))}</button></td>
+        <td><button class="mini danger" onclick="delPhase(${i},${pi})">✕</button></td>
+      </tr>`;
+    });
+    h += `</table>`;
+
+    // בורר תנועות למופע שנבחר: רשת זרוע × תנועה
+    if (cur.movesEdit && cur.movesEdit.i === i && it.phases[cur.movesEdit.pi]) {
+      const pi = cur.movesEdit.pi;
+      const ph = it.phases[pi];
+      const sel = {};
+      parseMoves(ph.moves).forEach(m => { sel[m.arm + m.mvt] = true; });
+      h += `<div style="border:1px solid #7c97ac;border-radius:4px;padding:6px;margin:4px 0;background:#f2f7fb">
+        <b class="small">תנועות מופע ${esc(ph.id)} בסקיצה:</b>
+        <table class="tbl"><tr><th>זרוע</th><th>ישר</th><th>שמאלה</th><th>ימינה</th></tr>`;
+      ['N', 'S', 'E', 'W'].forEach(arm => {
+        h += `<tr><td>${ARM_HEB[arm]} (${arm})</td>`;
+        ['T', 'L', 'R'].forEach(mvt => {
+          h += `<td><input type="checkbox" ${sel[arm + mvt] ? 'checked' : ''} onchange="toggleMove(${i},${pi},'${arm}','${mvt}',this.checked)"></td>`;
+        });
+        h += `</tr>`;
+      });
+      h += `</table>
+        <button class="mini" onclick="toggleMovesEdit(${i},${pi})">סגור</button></div>`;
+    }
+
+    h += `<button class="mini" onclick="addPhase(${i})">+ מופע</button>
+    <div class="hint">סימון ✓ = המופע מוצג על סרגל הכיוון. לחיצה על תא התנועות פותחת בורר לסקיצה; מופע בלי תנועות נבחרות מקבל חץ ישר אוטומטי לפי הכיוונים המסומנים.</div>`;
+  }
+  h += `</div></details>`;
+
+  /* --- תוכנית --- */
+  h += `<details class="sec" open><summary>תוכניות</summary><div class="secBody">
+    <div class="row">
+      <select onchange="selProgram(this.value)">
+        ${project.programs.map((pr, i) => `<option value="${i}" ${i === cur.progIdx ? 'selected' : ''}>${esc(pr.name)} (${pr.cycle} שנ')</option>`).join('')}
+      </select>
+      <button class="mini" onclick="addProgram()">+ חדשה</button>
+      <button class="mini" onclick="dupProgram()">שכפל</button>
+      <button class="mini danger" onclick="delProgram()">מחק</button>
+    </div>
+    <div class="row"><label>שם:</label>
+      <input type="text" value="${esc(prog.name)}" onchange="setProgField('name',this.value)">
+      <label>מחזור (שנ'):</label>
+      <input type="number" min="20" value="${prog.cycle}" onchange="setProgField('cycle',this.value)"></div>`;
+
+  h += `<table class="tbl"><tr><th>צומת</th><th>אופסט</th><th>ירוקי מופעים (זמן מקומי)</th></tr>`;
+  project.intersections.forEach((it2, i) => {
+    const d = prog.data[i] || newProgramData();
+    let cells = '';
+    it2.phases.forEach(ph => {
+      cells += `<div class="row" style="margin:1px 0"><b style="min-width:18px">${esc(ph.id)}:</b>
+        <input type="text" dir="ltr" style="width:110px" placeholder="7-34; 58-2"
+          value="${esc((d.greens || {})[ph.id] || '')}" onchange="setGreen(${i}, '${esc(ph.id)}', this.value)"></div>`;
+    });
+    h += `<tr><td>${esc(it2.name)}</td>
+      <td><input type="number" value="${d.offset || 0}" onchange="setOffset(${i}, this.value)"></td>
+      <td style="text-align:right">${cells}</td></tr>`;
+  });
+  h += `</table>
+  <div class="hint">ירוק בזמן מקומי של הצומת (מדיאגרמת הפאזות); האופסט מזיז את כל הצומת בזמן המערכת. מקטע החוצה את סוף המחזור: למשל <bdo dir="ltr">58-2</bdo>. כמה מקטעים מופרדים בנקודה-פסיק.</div>
+  </div></details>`;
+
+  /* --- קווי גל --- */
+  h += `<details class="sec" open><summary>קווי גל</summary><div class="secBody">
+    <div class="row">
+      <label>מהירות:</label><input type="number" id="toolSpeed" min="5" value="${cur.toolSpeed}"> קמ"ש
+      <button class="toolBtn ${cur.tool === 1 ? 'active' : ''}" onclick="startBandTool(1)">
+        <span class="dirDot" style="background:${STYLE.dir1}"></span> ${esc(project.dir1Label)}</button>
+      <button class="toolBtn ${cur.tool === 2 ? 'active' : ''}" onclick="startBandTool(2)">
+        <span class="dirDot" style="background:${STYLE.dir2}"></span> ${esc(project.dir2Label)}</button>
+    </div>
+    <div class="hint">${cur.tool ? 'לחץ על התרשים בנקודת ההתחלה (הקו נצמד לפינת ירוק קרובה). Esc לביטול.' : 'בחר כיוון ולחץ על התרשים להוספת קו. גרירה אנכית מזיזה קו; לחיצה כפולה מוחקת.'}</div>`;
+  (prog.bands || []).forEach((b, bi) => {
+    h += `<div class="bandRow">
+      <span class="dirDot" style="background:${b.dir === 2 ? STYLE.dir2 : STYLE.dir1}"></span>
+      <label>מ':</label><input type="number" value="${b.m}" onchange="setBandField(${bi},'m',this.value)">
+      <label>שנ':</label><input type="number" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
+      <label>קמ"ש:</label><input type="number" value="${b.speed}" onchange="setBandField(${bi},'speed',this.value)">
+      <button class="mini danger" onclick="delBand(${bi})">✕</button>
+    </div>`;
+  });
+  h += `</div></details>`;
+
+  document.getElementById('side').innerHTML = h;
+}
+
+function renderAll() {
+  renderDiagram();
+  renderSide();
+}
+
+/* ---------- אתחול ---------- */
+document.getElementById('ver').textContent = 'v' + APP_VERSION;
+restore();
+if (!project.programs || !project.programs.length) project = defaultProject();
+renderAll();
+</script>
+</body>
+</html>
