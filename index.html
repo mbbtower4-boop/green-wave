@@ -138,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.12.1';
+const APP_VERSION = '1.13.0';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -669,6 +669,41 @@ function applyOffset(i, v) {
 
 /* רצועת גל ירוק: שני קצוות מקבילים (הקדמי והאחורי) עם תחום מוצל ביניהם.
    רצועה ללא קצה שני מצוירת כקו בודד. */
+/* נקודת הייחוס של רצועה היא תמיד קצה היציאה בכיוון הנסיעה: לכיוון א'
+   הקצה בעל ה-m הקטן, לכיוון ב' הגדול. כך "זמן היציאה" שמוזן בחלונית
+   מתייחס לצומת שממנו השיירה יוצאת, ולא לקצה השרירותי שבו נוצרה. */
+function bandDepartM(b) {
+  const r = bandRange(b);
+  return b.dir === 2 ? r[1] : r[0];
+}
+
+function bandDepartName(b) {
+  const m = bandDepartM(b);
+  let name = 'קצה הציר';
+  G.pos.forEach((pp, i) => {
+    const sl = b.dir === 2 ? pp.b : pp.a;
+    if (Math.abs(sl - m) < 0.6 && project.intersections[i]) name = project.intersections[i].name;
+  });
+  return name;
+}
+
+// מעביר את נקודת הייחוס אל קצה היציאה בלי להזיז את הקו עצמו
+function reanchorBand(b) {
+  if (!G.pos || !G.pos.length) return;
+  const m = bandDepartM(b);
+  if (Math.abs(m - (+b.m || 0)) < 0.05) return;   // כבר מעוגן — לא לגעת
+  const dt = (m - (+b.m || 0)) * bandSlope(b);
+  let t = (+b.t || 0) + dt;
+  const C = G.cycle || (project.programs[cur.progIdx] || {}).cycle || 90;
+  const shift = mod(t, C) - t;          // נרמול לתחום המחזור, בלי לשנות את הרוחב
+  t += shift;
+  b.t = Math.round(t * 10) / 10;
+  if (b.t2 !== undefined && b.t2 !== null && b.t2 !== '') {
+    b.t2 = Math.round(((+b.t2) + dt + shift) * 10) / 10;
+  }
+  b.m = Math.round(m * 10) / 10;
+}
+
 function buildBands(prog) {
   let s = '';
   const list = (prog.bands || []).slice();
@@ -1144,14 +1179,18 @@ function onSvgClick(e) {
       alert('המהירות שהתקבלה ' + speed + ' קמ"ש — כנראה שנקודת ההגעה סומנה מוקדם מדי.');
       cur.pending = null; renderAll(); return;
     }
-    project.programs[cur.progIdx].bands.push({
+    const nb = {
       m: up.m, t: up.t, speed: speed, dir: cur.tool,
       from: nearestIntersection(up.m, cur.tool), to: nearestIntersection(down.m, cur.tool)
-    });
+    };
+    reanchorBand(nb);
+    project.programs[cur.progIdx].bands.push(nb);
   } else {
     // מצב רצועה: הקצה השני, מומר לזמן באותו חתך m של הקצה הראשון
     const t2 = Math.round((t - (m - pend.m) * bandSlope(pend)) * 10) / 10;
-    project.programs[cur.progIdx].bands.push({ m: pend.m, t: pend.t, t2: t2, speed: pend.speed, dir: pend.dir });
+    const nb = { m: pend.m, t: pend.t, t2: t2, speed: pend.speed, dir: pend.dir };
+    reanchorBand(nb);
+    project.programs[cur.progIdx].bands.push(nb);
   }
   cur.pending = null;
   cur.tool = null;
@@ -1366,7 +1405,11 @@ function setGreen(i, phId, val) {
 function setBandField(bi, key, val) {
   upd(() => {
     const b = project.programs[cur.progIdx].bands[bi];
-    if ((key === 'from' || key === 'to') && String(val) === '') { delete b[key]; return; }
+    if (key === 'from' || key === 'to') {
+      if (String(val) === '') delete b[key]; else b[key] = +val;
+      reanchorBand(b);          // הזמן נשאר "זמן היציאה" מהקצה החדש
+      return;
+    }
     b[key] = +val;
   });
 }
@@ -1685,6 +1728,8 @@ function renderSide() {
   </div></details>`;
 
   /* --- קווי גל --- */
+  (prog.bands || []).forEach(b => reanchorBand(b));
+
   const intOpts = sel => project.intersections.map((it2, i) =>
     `<option value="${i}" ${String(sel) === String(i) ? 'selected' : ''}>${esc(it2.name)}</option>`).join('');
 
@@ -1710,14 +1755,14 @@ function renderSide() {
     h += `<div style="border:1px solid #dde4ea;border-radius:4px;padding:4px 6px;margin-bottom:4px">
       <div class="bandRow">
         <span class="dirDot" style="background:${b.dir === 2 ? STYLE.dir2 : STYLE.dir1}"></span>
-        <label>מ:</label>
+        <label title="צומת היציאה בכיוון הנסיעה">מ:</label>
         <select onchange="setBandField(${bi},'from',this.value)"><option value="">קצה הציר</option>${intOpts(b.from)}</select>
         <label>עד:</label>
         <select onchange="setBandField(${bi},'to',this.value)"><option value="">קצה הציר</option>${intOpts(b.to)}</select>
         <button class="mini danger" onclick="delBand(${bi})">✕</button>
       </div>
       <div class="bandRow">
-        <label>קצה א' (שנ'):</label><input type="number" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
+        <label>יציאה מ${esc(bandDepartName(b))} (שנ'):</label><input type="number" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
         <label>רוחב:</label><input type="number" min="0" value="${w}" onchange="setBandWidth(${bi},this.value)">
         <label>קמ"ש:</label><input type="number" step="0.1" value="${b.speed}" onchange="setBandField(${bi},'speed',this.value)">
       </div>
