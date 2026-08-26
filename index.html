@@ -138,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.13.0';
+const APP_VERSION = '1.14.0';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -1410,6 +1410,15 @@ function setBandField(bi, key, val) {
       reanchorBand(b);          // הזמן נשאר "זמן היציאה" מהקצה החדש
       return;
     }
+    if (key === 't') {
+      // הזזת זמן היציאה מזיזה את הרצועה כולה — הרוחב נשמר
+      const d = (+val) - (+b.t || 0);
+      if (b.t2 !== undefined && b.t2 !== null && b.t2 !== '') {
+        b.t2 = Math.round(((+b.t2) + d) * 10) / 10;
+      }
+      b.t = +val;
+      return;
+    }
     b[key] = +val;
   });
 }
@@ -1429,6 +1438,17 @@ function toggleDerive(on) { cur.derive = !!on; cur.pending = null; renderSide();
 
 function delBand(bi) {
   upd(() => { project.programs[cur.progIdx].bands.splice(bi, 1); });
+}
+
+/* הוספת רצועה ידנית: נוצרת על קצה היציאה של הכיוון (הצומת הראשון
+   ברשימה לכיוון א', האחרון לכיוון ב') ומשם ממלאים את הערכים בשדות. */
+function addBand(dir) {
+  upd(() => {
+    const sp = document.getElementById('toolSpeed');
+    const speed = (sp && +sp.value) || cur.toolSpeed || 50;
+    const m = dir === 2 ? (G.totalM || 0) : 0;
+    project.programs[cur.progIdx].bands.push({ m: m, t: 0, t2: 20, speed: speed, dir: dir });
+  });
 }
 
 function startBandTool(dir) {
@@ -1743,12 +1763,18 @@ function renderSide() {
     </div>
     <div class="row"><label><input type="checkbox" ${cur.derive ? 'checked' : ''} onchange="toggleDerive(this.checked)">
       מקטע בין צמתים — המהירות מחושבת מהלחיצות</label></div>
+    <div class="row">
+      <button class="mini" onclick="addBand(1)" title="הוספת רצועה ידנית — הערכים מוזנים בשדות">
+        + רצועה <span class="dirDot" style="background:${STYLE.dir1}"></span> ${esc(project.dir1Label)}</button>
+      <button class="mini" onclick="addBand(2)" title="הוספת רצועה ידנית — הערכים מוזנים בשדות">
+        + רצועה <span class="dirDot" style="background:${STYLE.dir2}"></span> ${esc(project.dir2Label)}</button>
+    </div>
     <div class="hint">${
       cur.pending && cur.derive ? 'סומנה נקודת היציאה — לחץ עכשיו על נקודת ההגעה בצומת הבא. Esc לביטול.'
       : cur.pending ? 'סומן הקצה הראשון — לחץ עכשיו על הקצה השני של הרצועה. Esc לביטול.'
       : cur.tool && cur.derive ? 'לחץ על קצה הירוק בצומת היציאה, ואז על קצה הירוק בצומת ההגעה — הכלי יחשב את המהירות ויצייר מקטע ביניהם. Esc לביטול.'
       : cur.tool ? 'לחץ על הקצה הראשון של הרצועה, ואז על הקצה השני (הקליק נצמד לפינת ירוק קרובה). Esc לביטול.'
-      : 'שני מצבים: רצועה במהירות נתונה (שתי לחיצות = שני קצוות), או מקטע בין צמתים שבו המהירות נגזרת מהמרחק ומהזמן. גרירה אנכית מזיזה קצה; לחיצה כפולה מוחקת.'}</div>`;
+      : 'אפשר להוסיף רצועה ידנית בכפתורי "+ רצועה" ולמלא את הערכים בשדות, או לסמן אותה על התרשים: רצועה במהירות נתונה (שתי לחיצות = שני קצוות), או מקטע בין צמתים שבו המהירות נגזרת מהמרחק ומהזמן. גרירה אנכית מזיזה קצה; לחיצה כפולה מוחקת.'}</div>`;
   (prog.bands || []).forEach((b, bi) => {
     const hasBand = b.t2 !== undefined && b.t2 !== null && b.t2 !== '' && +b.t2 !== +b.t;
     const w = hasBand ? Math.abs(Math.round((+b.t2 - +b.t) * 10) / 10) : 0;
