@@ -138,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.14.0';
+const APP_VERSION = '1.15.1';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -223,7 +223,7 @@ function persist() {
 function restore() {
   try {
     const s = localStorage.getItem(LS_KEY);
-    if (s) project = JSON.parse(s);
+    if (s) project = normalizeOffsets(JSON.parse(s));
   } catch (e) {}
 }
 
@@ -242,7 +242,7 @@ function loadJSON(inp) {
   const r = new FileReader();
   r.onload = () => {
     try {
-      project = JSON.parse(r.result);
+      project = normalizeOffsets(JSON.parse(r.result));
       cur.progIdx = 0; cur.selInt = 0; cur.tool = null;
       persist(); renderAll();
     } catch (e) { alert('קובץ לא תקין: ' + e.message); }
@@ -267,6 +267,22 @@ function parseIntervals(str) {
 function intervalDur(s, e, cycle) { return e >= s ? e - s : cycle - s + e; }
 
 function mod(a, n) { return ((a % n) + n) % n; }
+
+// האופסט תמיד בשניות שלמות — עיגול ועטיפה לתחום [0,C)
+function normOffset(v, C) {
+  let o = Math.round(+v || 0);
+  if (C > 0) o = mod(o, C);
+  return o;
+}
+
+// נרמול פרויקט שנטען: אופסטים ישנים בחצאי שניות מעוגלים לשנייה שלמה
+function normalizeOffsets(p) {
+  ((p && p.programs) || []).forEach(prog => {
+    const C = +prog.cycle || 0;
+    (prog.data || []).forEach(d => { if (d) d.offset = normOffset(d.offset, C); });
+  });
+  return p;
+}
 
 // מיקומי הסרגלים במטרים: לכל צומת [a,b]; a = קו העצירה של כיוון 1
 function rulerPositions() {
@@ -337,7 +353,10 @@ function buildSVG() {
   s += `<rect x="0" y="0" width="${G.W}" height="${G.H}" fill="#ffffff"/>`;
 
   // כותרת
-  s += `<text x="${G.W / 2}" y="26" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c2733">` +
+  // direction="rtl" — ה-SVG כולו LTR (לצורך עיגון המקרא), ובלי זה הגרש הסופי
+  // של "שנ'" נחשב תו ניטרלי ונזרק לקצה הנגדי של הכותרת.
+  s += `<text x="${G.W / 2}" y="26" text-anchor="middle" font-size="20" font-weight="bold"` +
+       ` direction="rtl" unicode-bidi="embed" fill="#1c2733">` +
        `${esc(project.name)} — ${esc(prog.name)} — מחזור ${G.cycle} שנ'</text>`;
 
   // תוויות כיוון נסיעה בקצות התרשים (כיוון א' נוסע מהצומת הראשון לאחרון)
@@ -591,8 +610,8 @@ function offsetSolve(i) {
   if (![1, 2].some(d => bands[d].length)) return { error: 'אין רצועות גל שעוברות בצומת זה בתוכנית הנוכחית.' };
   if (!dirs.length) return { error: 'לא הוזנו זמני ירוק לכיוונים שהרצועות משרתות בצומת זה.' };
 
-  // סריקת כל האופסטים בצעד 0.5 שנ'
-  const step = 0.5, n = Math.round(C / step);
+  // סריקת כל האופסטים בצעד של שנייה שלמה
+  const step = 1, n = Math.max(1, Math.round(C / step));
   const rows = [];
   for (let k = 0; k < n; k++) {
     const dl = k * step;
@@ -625,7 +644,7 @@ function offsetSolve(i) {
     }
     return runs.map(r => ({
       from: mod(r[0] * step, C), to: mod(r[1] * step, C),
-      mid: mod((r[0] + (r[1] - r[0]) / 2) * step, C),
+      mid: mod(Math.round(r[0] + (r[1] - r[0]) / 2) * step, C),
       len: (r[1] - r[0]) * step
     })).sort((a, b) => b.len - a.len);
   }
@@ -664,7 +683,10 @@ function toggleOffsetCalc(i) {
 }
 
 function applyOffset(i, v) {
-  upd(() => { project.programs[cur.progIdx].data[i].offset = Math.round(v * 10) / 10; });
+  upd(() => {
+    const prog = project.programs[cur.progIdx];
+    prog.data[i].offset = normOffset(v, +prog.cycle || 0);
+  });
 }
 
 /* רצועת גל ירוק: שני קצוות מקבילים (הקדמי והאחורי) עם תחום מוצל ביניהם.
@@ -1391,7 +1413,10 @@ function setProgField(key, val) {
 }
 
 function setOffset(i, val) {
-  upd(() => { project.programs[cur.progIdx].data[i].offset = +val; });
+  upd(() => {
+    const prog = project.programs[cur.progIdx];
+    prog.data[i].offset = normOffset(val, +prog.cycle || 0);
+  });
 }
 
 function setGreen(i, phId, val) {
@@ -1732,7 +1757,7 @@ function renderSide() {
           value="${esc((d.greens || {})[ph.id] || '')}" onchange="setGreen(${i}, '${esc(ph.id)}', this.value)"></div>`;
     });
     h += `<tr><td>${esc(it2.name)}</td>
-      <td><input type="number" value="${d.offset || 0}" onchange="setOffset(${i}, this.value)">
+      <td><input type="number" step="1" min="0" value="${d.offset || 0}" onchange="setOffset(${i}, this.value)">
         <button class="mini ${cur.offsetCalc === i ? 'movesBtn active' : ''}" title="חישוב אופסט לכניסה לגל" onclick="toggleOffsetCalc(${i})">⚙</button></td>
       <td style="text-align:right">${cells}</td></tr>`;
   });
