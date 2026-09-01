@@ -138,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.15.1';
+const APP_VERSION = '1.16.0';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -223,7 +223,7 @@ function persist() {
 function restore() {
   try {
     const s = localStorage.getItem(LS_KEY);
-    if (s) project = normalizeOffsets(JSON.parse(s));
+    if (s) project = normalizeProject(JSON.parse(s));
   } catch (e) {}
 }
 
@@ -242,7 +242,7 @@ function loadJSON(inp) {
   const r = new FileReader();
   r.onload = () => {
     try {
-      project = normalizeOffsets(JSON.parse(r.result));
+      project = normalizeProject(JSON.parse(r.result));
       cur.progIdx = 0; cur.selInt = 0; cur.tool = null;
       persist(); renderAll();
     } catch (e) { alert('קובץ לא תקין: ' + e.message); }
@@ -275,11 +275,35 @@ function normOffset(v, C) {
   return o;
 }
 
-// נרמול פרויקט שנטען: אופסטים ישנים בחצאי שניות מעוגלים לשנייה שלמה
-function normalizeOffsets(p) {
+// כל ערכי הזמן בכלי הם שניות שלמות — זמני מופע, זמני רצועה ורוחבה.
+function secInt(v) { return Math.round(+v || 0); }
+
+// עיגול רצועה: הזמן לשנייה שלמה, והרוחב נשמר כשלם (כדי שלא יזוז בעיגול נפרד)
+function normBand(b) {
+  if (!b || b.t === undefined || b.t === null || b.t === '') return b;
+  const hasW = b.t2 !== undefined && b.t2 !== null && b.t2 !== '';
+  const w = hasW ? Math.round((+b.t2) - (+b.t)) : null;
+  b.t = secInt(b.t);
+  if (hasW) b.t2 = b.t + w;
+  return b;
+}
+
+// עיגול כל המספרים במחרוזת ירוקים ("13-34; 58-2") לשניות שלמות
+function roundGreens(str) {
+  if (str === undefined || str === null) return '';
+  return String(str).replace(/[0-9]+(?:\.[0-9]+)?/g, n => String(Math.round(+n)));
+}
+
+// נרמול פרויקט שנטען: אופסטים, זמני מופעים ורצועות — הכול לשניות שלמות
+function normalizeProject(p) {
   ((p && p.programs) || []).forEach(prog => {
     const C = +prog.cycle || 0;
-    (prog.data || []).forEach(d => { if (d) d.offset = normOffset(d.offset, C); });
+    (prog.data || []).forEach(d => {
+      if (!d) return;
+      d.offset = normOffset(d.offset, C);
+      if (d.greens) Object.keys(d.greens).forEach(k => { d.greens[k] = roundGreens(d.greens[k]); });
+    });
+    (prog.bands || []).forEach(normBand);
   });
   return p;
 }
@@ -514,7 +538,11 @@ function bandLabelSpot(m1, m2, aStart, aEnd, bStart, bEnd, hasBand) {
     const tMid = hasBand ? (tA + tB) / 2 : tA;
     if (tMid < 6 || tMid > G.span - 6) continue;
     const y = hasBand ? ty(tMid) + 4 : ty(tMid) - 6;
-    return { x: x, y: y, angle: Math.atan2(ty(aEnd) - ty(aStart), x2 - x1) * 180 / Math.PI };
+    // בציר הפוך (הצומת הראשון מימין) x2-x1 שלילי והזווית יוצאת מעל 90°,
+    // מה שמסובב את תווית המהירות הפוך. מיישרים אותה לכיוון קריא.
+    let ang = Math.atan2(ty(aEnd) - ty(aStart), x2 - x1) * 180 / Math.PI;
+    if (ang > 90) ang -= 180; else if (ang < -90) ang += 180;
+    return { x: x, y: y, angle: ang };
   }
   return null;
 }
@@ -715,14 +743,11 @@ function reanchorBand(b) {
   const m = bandDepartM(b);
   if (Math.abs(m - (+b.m || 0)) < 0.05) return;   // כבר מעוגן — לא לגעת
   const dt = (m - (+b.m || 0)) * bandSlope(b);
-  let t = (+b.t || 0) + dt;
+  const hasW = b.t2 !== undefined && b.t2 !== null && b.t2 !== '';
+  const w = hasW ? Math.round((+b.t2) - (+b.t || 0)) : null;   // הרוחב שלם ונשמר
   const C = G.cycle || (project.programs[cur.progIdx] || {}).cycle || 90;
-  const shift = mod(t, C) - t;          // נרמול לתחום המחזור, בלי לשנות את הרוחב
-  t += shift;
-  b.t = Math.round(t * 10) / 10;
-  if (b.t2 !== undefined && b.t2 !== null && b.t2 !== '') {
-    b.t2 = Math.round(((+b.t2) + dt + shift) * 10) / 10;
-  }
+  b.t = secInt(mod((+b.t || 0) + dt, C));
+  if (hasW) b.t2 = b.t + w;
   b.m = Math.round(m * 10) / 10;
 }
 
@@ -1170,7 +1195,7 @@ function onSvgClick(e) {
     if (d < bestD) { bestD = d; best = sp; }
   });
   if (best) { m = best.m; t = best.t; }
-  m = Math.round(m * 10) / 10; t = Math.round(t * 10) / 10;
+  m = Math.round(m * 10) / 10; t = secInt(t);
 
   if (!cur.pending) {
     // קליק ראשון — הקצה הראשון של הרצועה (או תחילת המקטע במצב מחושב)
@@ -1209,7 +1234,7 @@ function onSvgClick(e) {
     project.programs[cur.progIdx].bands.push(nb);
   } else {
     // מצב רצועה: הקצה השני, מומר לזמן באותו חתך m של הקצה הראשון
-    const t2 = Math.round((t - (m - pend.m) * bandSlope(pend)) * 10) / 10;
+    const t2 = secInt(t - (m - pend.m) * bandSlope(pend));
     const nb = { m: pend.m, t: pend.t, t2: t2, speed: pend.speed, dir: pend.dir };
     reanchorBand(nb);
     project.programs[cur.progIdx].bands.push(nb);
@@ -1247,7 +1272,7 @@ function onDragMove(e) {
   const scale = svg.getBoundingClientRect().height / G.H;
   const dt = (cur.dragBand.startY - e.clientY) / (G.pxSec * scale) * -1;
   const b = project.programs[cur.progIdx].bands[cur.dragBand.idx];
-  b[cur.dragBand.key] = Math.round((cur.dragBand.startT - dt) * 10) / 10;
+  b[cur.dragBand.key] = secInt(cur.dragBand.startT - dt);
   renderDiagram();
 }
 
@@ -1423,7 +1448,7 @@ function setGreen(i, phId, val) {
   upd(() => {
     const d = project.programs[cur.progIdx].data[i];
     if (!d.greens) d.greens = {};
-    d.greens[phId] = val;
+    d.greens[phId] = roundGreens(val);
   });
 }
 
@@ -1437,11 +1462,12 @@ function setBandField(bi, key, val) {
     }
     if (key === 't') {
       // הזזת זמן היציאה מזיזה את הרצועה כולה — הרוחב נשמר
-      const d = (+val) - (+b.t || 0);
+      const nt = secInt(val);
+      const d = nt - (+b.t || 0);
       if (b.t2 !== undefined && b.t2 !== null && b.t2 !== '') {
-        b.t2 = Math.round(((+b.t2) + d) * 10) / 10;
+        b.t2 = secInt((+b.t2) + d);
       }
-      b.t = +val;
+      b.t = nt;
       return;
     }
     b[key] = +val;
@@ -1452,10 +1478,10 @@ function setBandField(bi, key, val) {
 function setBandWidth(bi, val) {
   upd(() => {
     const b = project.programs[cur.progIdx].bands[bi];
-    const w = Math.abs(+val || 0);
+    const w = Math.abs(secInt(val));
     if (!w) { delete b.t2; return; }
     const sign = (b.t2 !== undefined && +b.t2 < +b.t) ? -1 : 1;
-    b.t2 = Math.round((+b.t + sign * w) * 10) / 10;
+    b.t2 = secInt(b.t) + sign * w;
   });
 }
 
@@ -1802,7 +1828,7 @@ function renderSide() {
       : 'אפשר להוסיף רצועה ידנית בכפתורי "+ רצועה" ולמלא את הערכים בשדות, או לסמן אותה על התרשים: רצועה במהירות נתונה (שתי לחיצות = שני קצוות), או מקטע בין צמתים שבו המהירות נגזרת מהמרחק ומהזמן. גרירה אנכית מזיזה קצה; לחיצה כפולה מוחקת.'}</div>`;
   (prog.bands || []).forEach((b, bi) => {
     const hasBand = b.t2 !== undefined && b.t2 !== null && b.t2 !== '' && +b.t2 !== +b.t;
-    const w = hasBand ? Math.abs(Math.round((+b.t2 - +b.t) * 10) / 10) : 0;
+    const w = hasBand ? Math.abs(secInt(+b.t2 - +b.t)) : 0;
     h += `<div style="border:1px solid #dde4ea;border-radius:4px;padding:4px 6px;margin-bottom:4px">
       <div class="bandRow">
         <span class="dirDot" style="background:${b.dir === 2 ? STYLE.dir2 : STYLE.dir1}"></span>
@@ -1813,8 +1839,8 @@ function renderSide() {
         <button class="mini danger" onclick="delBand(${bi})">✕</button>
       </div>
       <div class="bandRow">
-        <label>יציאה מ${esc(bandDepartName(b))} (שנ'):</label><input type="number" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
-        <label>רוחב:</label><input type="number" min="0" value="${w}" onchange="setBandWidth(${bi},this.value)">
+        <label>יציאה מ${esc(bandDepartName(b))} (שנ'):</label><input type="number" step="1" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
+        <label>רוחב:</label><input type="number" step="1" min="0" value="${w}" onchange="setBandWidth(${bi},this.value)">
         <label>קמ"ש:</label><input type="number" step="0.1" value="${b.speed}" onchange="setBandField(${bi},'speed',this.value)">
       </div>
     </div>`;
