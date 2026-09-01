@@ -138,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.16.0';
+const APP_VERSION = '1.17.0';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -439,6 +439,9 @@ function buildSVG() {
       s += `<text x="${cx}" y="${nameY + k * 15}" text-anchor="middle" font-size="13" font-weight="bold" fill="#1c2733">${esc(pt.trim())}</text>`;
     });
   });
+
+  // חיווי חי בזמן גרירת קצה רצועה: הערכים השלמים שאליהם היא נצמדת
+  s += buildDragReadout(prog);
 
   // שורת מידות (בין כל זוג סרגלים סמוכים) ומפתח
   s += buildDimensions();
@@ -863,6 +866,29 @@ function legendLayout() {
   return rows;
 }
 
+/* תווית החיווי בזמן גרירה. הרצועה נעה בקפיצות של שנייה שלמה, ובלי חיווי
+   הקפיצה בת 3 הפיקסלים נראית רציפה — כאן רואים את הערך שאליו היא נצמדה. */
+function buildDragReadout(prog) {
+  if (!cur.dragBand) return '';
+  const b = (prog.bands || [])[cur.dragBand.idx];
+  if (!b) return '';
+  const hasW = b.t2 !== undefined && b.t2 !== null && b.t2 !== '';
+  const w = hasW ? Math.abs(secInt(+b.t2 - +b.t)) : 0;
+  const txt = 'יציאה ' + secInt(b.t) + (hasW ? '  ·  רוחב ' + w + " שנ'" : '');
+  const x = mx(+b.m || 0);
+  const y = ty(mod(+b[cur.dragBand.key] || 0, G.cycle)) - 14;
+  const cv = document.createElement('canvas').getContext('2d');
+  cv.font = 'bold 12px "Segoe UI", Arial, sans-serif';
+  const tw = Math.ceil(cv.measureText(txt).width) + 14;
+  const bx = Math.min(Math.max(x - tw / 2, G.ML + 2), G.W - G.MR - tw - 2);
+  const by = Math.min(Math.max(y - 15, G.topY + 2), G.topY + G.diagH - 22);
+  const col = b.dir === 2 ? STYLE.dir2 : STYLE.dir1;
+  return `<g><rect x="${bx}" y="${by}" width="${tw}" height="19" rx="3" fill="#ffffff" ` +
+         `stroke="${col}" stroke-width="1.2" opacity="0.96"/>` +
+         `<text x="${bx + tw / 2}" y="${by + 13.5}" text-anchor="middle" font-size="12" ` +
+         `font-weight="bold" direction="rtl" unicode-bidi="embed" fill="${col}">${esc(txt)}</text></g>`;
+}
+
 function buildLegend() {
   const rows = G.legendRows || legendLayout();
   let s = '';
@@ -1261,6 +1287,7 @@ function onSvgPointerDown(e) {
     const b = project.programs[cur.progIdx].bands[+el.dataset.band];
     const key = el.dataset.edge === 't2' ? 't2' : 't';
     cur.dragBand = { idx: +el.dataset.band, key: key, startY: e.clientY, startT: +b[key] };
+    renderDiagram();            // החיווי מופיע מיד, עוד לפני התזוזה הראשונה
     window.addEventListener('pointermove', onDragMove);
     window.addEventListener('pointerup', onDragEnd);
   }
@@ -1272,8 +1299,22 @@ function onDragMove(e) {
   const scale = svg.getBoundingClientRect().height / G.H;
   const dt = (cur.dragBand.startY - e.clientY) / (G.pxSec * scale) * -1;
   const b = project.programs[cur.progIdx].bands[cur.dragBand.idx];
-  b[cur.dragBand.key] = secInt(cur.dragBand.startT - dt);
+  const nv = secInt(cur.dragBand.startT - dt);
+  if (nv === +b[cur.dragBand.key]) return;   // אין שינוי — לא לרנדר מחדש
+  b[cur.dragBand.key] = nv;
   renderDiagram();
+  syncBandInputs(cur.dragBand.idx, b);
+}
+
+/* עדכון ישיר של שדות המספר בצד, בלי לרנדר מחדש את כל הפאנל */
+function syncBandInputs(bi, b) {
+  const t = document.getElementById('bandT' + bi);
+  if (t) t.value = secInt(b.t);
+  const w = document.getElementById('bandW' + bi);
+  if (w) {
+    const has = b.t2 !== undefined && b.t2 !== null && b.t2 !== '';
+    w.value = has ? Math.abs(secInt(+b.t2 - +b.t)) : 0;
+  }
 }
 
 function onDragEnd() {
@@ -1839,8 +1880,8 @@ function renderSide() {
         <button class="mini danger" onclick="delBand(${bi})">✕</button>
       </div>
       <div class="bandRow">
-        <label>יציאה מ${esc(bandDepartName(b))} (שנ'):</label><input type="number" step="1" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
-        <label>רוחב:</label><input type="number" step="1" min="0" value="${w}" onchange="setBandWidth(${bi},this.value)">
+        <label>יציאה מ${esc(bandDepartName(b))} (שנ'):</label><input type="number" step="1" id="bandT${bi}" value="${b.t}" onchange="setBandField(${bi},'t',this.value)">
+        <label>רוחב:</label><input type="number" step="1" min="0" id="bandW${bi}" value="${w}" onchange="setBandWidth(${bi},this.value)">
         <label>קמ"ש:</label><input type="number" step="0.1" value="${b.speed}" onchange="setBandField(${bi},'speed',this.value)">
       </div>
     </div>`;
