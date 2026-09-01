@@ -138,7 +138,7 @@
    מקווקווים במהירות נבחרת, סקיצות צמתים למעלה.
    ================================================================ */
 
-const APP_VERSION = '1.17.0';
+const APP_VERSION = '1.17.1';
 
 /* עיצוב התרשים — שפה גרפית עצמאית (שונה במכוון מפלט ענבר):
    מלבני ירוק מלאים עם מספר לבן, קווי גל כחול/כתום, ציר זמן אפור-כחול,
@@ -1290,6 +1290,7 @@ function onSvgPointerDown(e) {
     renderDiagram();            // החיווי מופיע מיד, עוד לפני התזוזה הראשונה
     window.addEventListener('pointermove', onDragMove);
     window.addEventListener('pointerup', onDragEnd);
+    window.addEventListener('pointercancel', onDragEnd);   // גרירה שנקטעה (יציאה מהחלון, מגע)
   }
 }
 
@@ -1320,7 +1321,10 @@ function syncBandInputs(bi, b) {
 function onDragEnd() {
   window.removeEventListener('pointermove', onDragMove);
   window.removeEventListener('pointerup', onDragEnd);
-  if (cur.dragBand) { cur.dragBand = null; persist(); renderSide(); }
+  window.removeEventListener('pointercancel', onDragEnd);
+  // renderAll ולא renderSide בלבד: התרשים חייב להיבנות מחדש בלי cur.dragBand,
+  // אחרת תווית החיווי נשארת מצוירת ב-SVG גם אחרי סיום הגרירה.
+  if (cur.dragBand) { cur.dragBand = null; persist(); renderAll(); }
 }
 
 function onSvgDblClick(e) {
